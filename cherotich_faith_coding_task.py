@@ -11,11 +11,13 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file):
     harvest = pd.read_excel(harvest_file)
     sampling = pd.read_excel(sampling_file)
     transfers = pd.read_excel(transfer_file)
-    # Correct transfer weight if given in grams
+    
+    # Correct transfer weights if given in grams
     if 'WEIGHT' in transfers.columns:
         transfers['WEIGHT_KG'] = transfers['WEIGHT']
         if transfers['WEIGHT'].max() > 1000:  # likely grams
             transfers['WEIGHT_KG'] = transfers['WEIGHT'] / 1000
+
     return feeding, harvest, sampling, transfers
 
 # ===============================
@@ -26,7 +28,6 @@ def preprocess_cage2(feeding, harvest, sampling, transfers):
     feeding_c2 = feeding[feeding['CAGE NUMBER'] == cage_number].copy()
     harvest_c2 = harvest[harvest['CAGE'] == cage_number].copy()
     sampling_c2 = sampling[sampling['CAGE NUMBER'] == cage_number].copy()
-    transfers_c2 = transfers[transfers['CAGE_FROM'] == cage_number].copy()
 
     # Add stocking manually
     stocking_date = pd.to_datetime("2024-08-26")
@@ -46,10 +47,11 @@ def preprocess_cage2(feeding, harvest, sampling, transfers):
     sampling_c2 = sampling_c2[(sampling_c2['DATE'] >= start_date) & (sampling_c2['DATE'] <= end_date)]
     feeding_c2 = feeding_c2[(feeding_c2['DATE'] >= start_date) & (feeding_c2['DATE'] <= end_date)]
 
-    # Apply transfers: subtract transferred out fish from NUMBER OF FISH
-    if not transfers_c2.empty:
-        for idx, row in transfers_c2.iterrows():
-            date_mask = sampling_c2['DATE'] >= row['DATE']
+    # Apply transfers out of Cage 2
+    if transfers is not None and not transfers.empty:
+        transfers_out = transfers[transfers['ORIGIN CAGE'] == cage_number].copy()
+        for idx, row in transfers_out.iterrows():
+            date_mask = sampling_c2['DATE'] >= pd.to_datetime(row['DATE'])
             sampling_c2.loc[date_mask, 'NUMBER OF FISH'] -= row['NUMBER_FISH']
 
     return feeding_c2, harvest_c2, sampling_c2
