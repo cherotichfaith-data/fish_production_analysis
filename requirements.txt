@@ -1,7 +1,7 @@
-streamlit==1.49.1
-plotly
+streamlit
 pandas
 numpy
-matplotlib
-seaborn
+scikit-learn
+xgboost
+plotly
 openpyxl
