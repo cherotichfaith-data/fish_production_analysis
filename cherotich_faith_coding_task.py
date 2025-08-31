@@ -12,11 +12,30 @@ import plotly.express as px
 # ==========================
 # 1. Load Data
 # ==========================
+def standardize_columns(df):
+    """Clean column names: strip spaces, uppercase, normalize brackets."""
+    df.columns = (
+        df.columns.str.strip()       # remove leading/trailing spaces
+        .str.upper()                 # make uppercase
+        .str.replace("  ", " ", regex=False)  # remove double spaces
+        .str.replace("[", "", regex=False)    # remove [
+        .str.replace("]", "", regex=False)    # remove ]
+    )
+    return df
+
+
 def load_data(feeding_file, harvest_file, sampling_file, transfer_file):
     feeding = pd.read_excel(feeding_file)
     harvest = pd.read_excel(harvest_file)
     sampling = pd.read_excel(sampling_file)
     transfer = pd.read_excel(transfer_file)
+
+    # Standardize column names
+    feeding = standardize_columns(feeding)
+    harvest = standardize_columns(harvest)
+    sampling = standardize_columns(sampling)
+    transfer = standardize_columns(transfer)
+
     return feeding, harvest, sampling, transfer
 
 
@@ -39,53 +58,65 @@ def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df):
     transfer_df = transfer_df.dropna(axis=1, how="all")
 
     # Fill missing feeding values
-    if "FEED AMOUNT (Kg)" in feeding_df.columns:
-        feeding_df["FEED AMOUNT (Kg)"] = feeding_df["FEED AMOUNT (Kg)"].fillna(0)
+    if "FEED AMOUNT (KG)" in feeding_df.columns:
+        feeding_df["FEED AMOUNT (KG)"] = feeding_df["FEED AMOUNT (KG)"].fillna(0)
     if "FEEDING TYPE" in feeding_df.columns:
-        feeding_df["FEEDING TYPE"] = feeding_df["FEEDING TYPE"].fillna("Unknown")
-    if "feeding_response [very good, good, bad]" in feeding_df.columns:
-        feeding_df["feeding_response [very good, good, bad]"] = feeding_df[
-            "feeding_response [very good, good, bad]"
-        ].fillna("Unknown")
+        feeding_df["FEEDING TYPE"] = feeding_df["FEEDING TYPE"].fillna("UNKNOWN")
+    if "FEEDING_RESPONSE VERY GOOD, GOOD, BAD" in feeding_df.columns:
+        feeding_df["FEEDING_RESPONSE VERY GOOD, GOOD, BAD"] = feeding_df[
+            "FEEDING_RESPONSE VERY GOOD, GOOD, BAD"
+        ].fillna("UNKNOWN")
 
     # Fill missing transfer values
-    if "Total weight [kg]" in transfer_df.columns:
-        transfer_df["Total weight [kg]"] = transfer_df["Total weight [kg]"].fillna(0)
-    if "ABW [g]" in transfer_df.columns:
-        transfer_df["ABW [g]"] = transfer_df["ABW [g]"].fillna(0)
+    if "TOTAL WEIGHT KG" in transfer_df.columns:
+        transfer_df["TOTAL WEIGHT KG"] = transfer_df["TOTAL WEIGHT KG"].fillna(0)
+    if "ABW G" in transfer_df.columns:
+        transfer_df["ABW G"] = transfer_df["ABW G"].fillna(0)
 
     return feeding_df, harvest_df, sampling_df, transfer_df
 
 
 # ==========================
-# 3. Compute Production Summary (UNCHANGED)
+# 3. Compute Production Summary
 # ==========================
 def compute_production_summary(feeding_df, harvest_df, sampling_df, transfer_df):
     summary = {}
 
     # Feeding aggregates
-    feed_summary = feeding_df.groupby("CAGE NUMBER")["FEED AMOUNT (Kg)"].sum().reset_index()
-    summary["feed"] = feed_summary
+    if "CAGE NUMBER" in feeding_df.columns and "FEED AMOUNT (KG)" in feeding_df.columns:
+        feed_summary = feeding_df.groupby("CAGE NUMBER")["FEED AMOUNT (KG)"].sum().reset_index()
+        summary["feed"] = feed_summary
 
     # Harvest aggregates
-    harvest_summary = harvest_df.groupby("CAGE")[["NUMBER OF FISH", "TOTAL WEIGHT  [kg]"]].sum().reset_index()
-    summary["harvest"] = harvest_summary
+    if {"CAGE", "NUMBER OF FISH", "TOTAL WEIGHT KG"}.issubset(harvest_df.columns):
+        harvest_summary = harvest_df.groupby("CAGE")[["NUMBER OF FISH", "TOTAL WEIGHT KG"]].sum().reset_index()
+        summary["harvest"] = harvest_summary
+    else:
+        st.warning("⚠️ Harvest file missing expected columns.")
 
     # Sampling aggregates
-    if sampling_df.empty:
-        st.write("⚠️ No sampling data available. Skipping growth analysis.")
-    else:
-        sampling_summary = sampling_df.groupby("CAGE NUMBER")["AVERAGE BODY WEIGHT(g)"].mean().reset_index()
+    if {"CAGE NUMBER", "AVERAGE BODY WEIGHTG"}.issubset(sampling_df.columns):
+        sampling_summary = sampling_df.groupby("CAGE NUMBER")["AVERAGE BODY WEIGHTG"].mean().reset_index()
         summary["sampling"] = sampling_summary
+    else:
+        st.warning("⚠️ Sampling file missing expected columns.")
 
     # Transfer aggregates
-    transfer_summary = transfer_df.groupby("DESTINATION CAGE")["NUMBER OF FISH"].sum().reset_index()
-    summary["transfer"] = transfer_summary
+    if {"DESTINATION CAGE", "NUMBER OF FISH"}.issubset(transfer_df.columns):
+        transfer_summary = transfer_df.groupby("DESTINATION CAGE")["NUMBER OF FISH"].sum().reset_index()
+        summary["transfer"] = transfer_summary
 
-    # Compute EFCR: Feed given / Harvested weight
-    efcr_df = pd.merge(feed_summary, harvest_summary, left_on="CAGE NUMBER", right_on="CAGE", how="left")
-    efcr_df["EFCR"] = efcr_df["FEED AMOUNT (Kg)"] / efcr_df["TOTAL WEIGHT  [kg]"].replace(0, pd.NA)
-    summary["efcr"] = efcr_df
+    # Compute EFCR if both feed & harvest available
+    if "feed" in summary and "harvest" in summary:
+        efcr_df = pd.merge(
+            summary["feed"],
+            summary["harvest"],
+            left_on="CAGE NUMBER",
+            right_on="CAGE",
+            how="left"
+        )
+        efcr_df["EFCR"] = efcr_df["FEED AMOUNT (KG)"] / efcr_df["TOTAL WEIGHT KG"].replace(0, pd.NA)
+        summary["efcr"] = efcr_df
 
     return summary
 
