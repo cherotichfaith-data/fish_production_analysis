@@ -5,11 +5,51 @@ import numpy as np
 import plotly.express as px
 
 # 1. Load data
-def load_data(feeding_file, harvest_file, sampling_file):
+def load_data(feeding_file, harvest_file, sampling_file, transfer_file):
     feeding = pd.read_excel(feeding_file)
     harvest = pd.read_excel(harvest_file)
     sampling = pd.read_excel(sampling_file)
-    return feeding, harvest, sampling
+    transfer = pd.read_excel(transfer_file)
+    return feeding, harvest, sampling, transfer
+
+# Load the data and check for missing values
+feeding_file = 'feeding record.xlsx'
+harvest_file = 'fish harvest.xlsx'
+sampling_file = 'fish sampling.xlsx'
+transfer_file = 'fish transfer.xlsx'
+
+feeding, harvest, sampling, transfer = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
+
+#Check for missing values
+print("Missing values in feeding dataframe:")
+print(feeding.isnull().sum())
+
+print("\nMissing values in harvest dataframe:")
+print(harvest.isnull().sum())
+
+print("\nMissing values in sampling dataframe:")
+print(sampling.isnull().sum())
+
+print("\nMissing values in transfer dataframe:")
+print(transfer.isnull().sum())
+
+#handling missing values
+def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df):
+    # Drop completely empty columns (like Unnamed)
+    feeding_df = feeding_df.dropna(axis=1, how="all")
+    harvest_df = harvest_df.dropna(axis=1, how="all")
+    sampling_df = sampling_df.dropna(axis=1, how="all")
+    transfer_df = transfer_df.dropna(axis=1, how="all")
+    
+    # Fill non-critical missing values
+    feeding_df["FEED AMOUNT (Kg)"] = feeding_df["FEED AMOUNT (Kg)"].fillna(0)
+    feeding_df["FEEDING TYPE"] = feeding_df["FEEDING TYPE"].fillna("Unknown")
+    feeding_df["feeding_response [very good, good, bad]"] = feeding_df["feeding_response [very good, good, bad]"].fillna("Unknown")
+
+    transfer_df["Total weight [kg]"] = transfer_df["Total weight [kg]"].fillna(0)
+    transfer_df["ABW [g]"] = transfer_df["ABW [g]"].fillna(0)
+
+    return feeding_df, harvest_df, sampling_df, transfer_df
 
 # 2. Preprocess Cage 2
 def preprocess_cage2(feeding, harvest, sampling):
@@ -61,33 +101,35 @@ def preprocess_cage2(feeding, harvest, sampling):
 
 
 # 3. Compute production summary
-def compute_summary(feeding_c2, sampling_c2):
-    feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'])
-    sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'])
 
-    # cumulative feed
-    feeding_c2['CUM_FEED'] = feeding_c2['FEED AMOUNT (Kg)'].cumsum()
+def compute_production_summary(feeding_df, harvest_df, sampling_df, transfer_df):
+    summary = {}
 
-    # total biomass in kg
-    sampling_c2['TOTAL_WEIGHT_KG'] = sampling_c2['NUMBER OF FISH'] * sampling_c2['AVERAGE BODY WEIGHT (g)'] / 1000
+    # Feeding aggregates
+    feed_summary = feeding_df.groupby("CAGE NUMBER")["FEED AMOUNT (Kg)"].sum().reset_index()
+    summary["feed"] = feed_summary
 
-    # merge feed to sampling by date
-    summary = pd.merge_asof(
-        sampling_c2.sort_values('DATE'),
-        feeding_c2.sort_values('DATE')[['DATE', 'CUM_FEED']],
-        on='DATE',
-        direction='backward'
-    )
+    # Harvest aggregates
+    harvest_summary = harvest_df.groupby("CAGE")[["NUMBER OF FISH", "TOTAL WEIGHT  [kg]"]].sum().reset_index()
+    summary["harvest"] = harvest_summary
 
-    # eFCR calculations
-    epsilon = 1e-6  # avoid division by zero
-    summary['AGGREGATED_eFCR'] = summary['CUM_FEED'] / (summary['TOTAL_WEIGHT_KG'] + epsilon)
-    summary['PERIOD_WEIGHT_GAIN'] = summary['TOTAL_WEIGHT_KG'].diff().fillna(summary['TOTAL_WEIGHT_KG'])
-    summary['PERIOD_FEED'] = summary['CUM_FEED'].diff().fillna(summary['CUM_FEED'])
-    summary['PERIOD_eFCR'] = summary['PERIOD_FEED'] / (summary['PERIOD_WEIGHT_GAIN'] + epsilon)
+    # Sampling aggregates
+    if sampling_df.empty:
+        print("No sampling data available. Skipping growth analysis.")
+    else:
+        sampling_summary = sampling_df.groupby("CAGE NUMBER")["AVERAGE BODY WEIGHT(g)"].mean().reset_index()
+        summary["sampling"] = sampling_summary
+
+    # Transfer aggregates
+    transfer_summary = transfer_df.groupby("DESTINATION CAGE")["NUMBER OF FISH"].sum().reset_index()
+    summary["transfer"] = transfer_summary
+
+    # Compute EFCR: Feed given/Harvested weight
+    efcr_df = pd.merge(feed_summary, harvest_summary, left_on="CAGE NUMBER", right_on="CAGE", how="left")
+    efcr_df["EFCR"] = efcr_df["FEED AMOUNT (Kg)"] / efcr_df["TOTAL WEIGHT  [kg]"].replace(0, pd.NA)
+    summary["efcr"] = efcr_df
 
     return summary
-
 # 4. Create mock cages (3-7)
 def create_mock_cage_data(summary_c2):
     mock_summaries = {}
