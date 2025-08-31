@@ -1,167 +1,128 @@
-# main.py
+# app.py — Fish Cage Production Analysis
+
+# ==========================
+# 0. Import Libraries
+# ==========================
+import streamlit as st
 import pandas as pd
 import numpy as np
-import streamlit as st
-import matplotlib.pyplot as plt
-from io import BytesIO
+import plotly.express as px
 
-st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
 
-# ---------------------------
-# 1. Load Excel data
-# ---------------------------
-feeding_df = pd.read_excel(r"C:\Users\user\Downloads\feeding record.xlsx")
-harvest_df = pd.read_excel(r"C:\Users\user\Downloads\fish harvest.xlsx")
-transfer_df = pd.read_excel(r"C:\Users\user\Downloads\feeding record.xlsx")
+# ==========================
+# 1. Load Data
+# ==========================
+def load_data(feeding_file, harvest_file, sampling_file, transfer_file):
+    feeding = pd.read_excel(feeding_file)
+    harvest = pd.read_excel(harvest_file)
+    sampling = pd.read_excel(sampling_file)
+    transfer = pd.read_excel(transfer_file)
+    return feeding, harvest, sampling, transfer
 
-# ---------------------------
-# 2. Filter Cage 2 and timeframe
-# ---------------------------
-start_date = pd.to_datetime("2024-07-16")
-end_date = pd.to_datetime("2025-06-30")
-cage_number = 2
 
-feeding_df['DATE'] = pd.to_datetime(feeding_df['DATE'], errors='coerce')
-harvest_df['DATE'] = pd.to_datetime(harvest_df['DATE'], errors='coerce')
-transfer_df['DATE'] = pd.to_datetime(transfer_df['DATE'], errors='coerce')
+# ==========================
+# 2. Check & Handle Missing Values
+# ==========================
+def inspect_missing_values(df_dict):
+    """Print missing values summary for each dataframe."""
+    for name, df in df_dict.items():
+        st.write(f"### Missing values in {name} dataframe")
+        st.write(df.isnull().sum())
 
-feeding_df_filtered = feeding_df[(feeding_df['CAGE NUMBER'] == f'C{cage_number}') &
-                                 (feeding_df['DATE'] >= start_date) &
-                                 (feeding_df['DATE'] <= end_date)].copy()
 
-harvest_df_filtered = harvest_df[(harvest_df['CAGE'] == f'CAGE {cage_number}') &
-                                 (harvest_df['DATE'] >= start_date) &
-                                 (harvest_df['DATE'] <= end_date)].copy()
+def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df):
+    """Basic cleaning: drop empty cols, fill important fields."""
+    # Drop empty columns
+    feeding_df = feeding_df.dropna(axis=1, how="all")
+    harvest_df = harvest_df.dropna(axis=1, how="all")
+    sampling_df = sampling_df.dropna(axis=1, how="all")
+    transfer_df = transfer_df.dropna(axis=1, how="all")
 
-transfer_df_filtered = transfer_df[((transfer_df['ORIGIN CAGE'] == f'CAGE {cage_number}') |
-                                     (transfer_df['DESTINATION CAGE'] == f'CAGE {cage_number}')) &
-                                    (transfer_df['DATE'] >= start_date) &
-                                    (transfer_df['DATE'] <= end_date)].copy()
-# Filter cage 2
-feeding_c2 = feeding_df[(feeding_df['CAGE NUMBER'] == cage_number) & 
-                        (feeding_df['DATE'] >= start_date) & 
-                        (feeding_df['DATE'] <= end_date)].copy()
+    # Fill missing feeding values
+    if "FEED AMOUNT (Kg)" in feeding_df.columns:
+        feeding_df["FEED AMOUNT (Kg)"] = feeding_df["FEED AMOUNT (Kg)"].fillna(0)
+    if "FEEDING TYPE" in feeding_df.columns:
+        feeding_df["FEEDING TYPE"] = feeding_df["FEEDING TYPE"].fillna("Unknown")
+    if "feeding_response [very good, good, bad]" in feeding_df.columns:
+        feeding_df["feeding_response [very good, good, bad]"] = feeding_df[
+            "feeding_response [very good, good, bad]"
+        ].fillna("Unknown")
 
-harvest_c2 = harvest_df[(harvest_df['CAGE'] == cage_number) & 
-                        (harvest_df['DATE'] >= start_date) & 
-                        (harvest_df['DATE'] <= end_date)].copy()
+    # Fill missing transfer values
+    if "Total weight [kg]" in transfer_df.columns:
+        transfer_df["Total weight [kg]"] = transfer_df["Total weight [kg]"].fillna(0)
+    if "ABW [g]" in transfer_df.columns:
+        transfer_df["ABW [g]"] = transfer_df["ABW [g]"].fillna(0)
 
-transfer_c2 = transfer_df[(transfer_df['ORIGIN CAGE'] == cage_number) | 
-                          (transfer_df['DESTINATION CAGE'] == cage_number)]
-# ---------------------------
-# 3. Add stocking manually
-# ---------------------------
-stocking = pd.DataFrame({
-    'DATE': [start_date],
-    'NUMBER_OF_FISH': [7902],
-    'ABW': [0.7]  # g
-})
+    return feeding_df, harvest_df, sampling_df, transfer_df
 
-# ---------------------------
-# 4. Mock sampling data for Cage 2
-# ---------------------------
-sampling_dates = pd.date_range(start=start_date + pd.Timedelta(days=20), end=end_date, freq='20D')
-np.random.seed(42)
-sampling_c2 = pd.DataFrame({
-    'DATE': sampling_dates,
-    'CAGE NUMBER': cage_number,
-    'NUMBER OF FISH': np.linspace(7900, harvest_c2['NUMBER OF_FISH'].sum() if not harvest_c2.empty else 7800, len(sampling_dates)).astype(int),
-    'AVERAGE BODY WEIGHT (g)': np.linspace(0.7, harvest_c2['ABW'].mean() if not harvest_c2.empty else 500, len(sampling_dates)) + np.random.normal(0, 5, len(sampling_dates))
-})
-# Include stocking
-sampling_c2 = pd.concat([stocking.rename(columns={'NUMBER_OF_FISH':'NUMBER OF FISH', 'ABW':'AVERAGE BODY WEIGHT (g)'}), sampling_c2], ignore_index=True)
 
-# ---------------------------
-# 5. Simulate 5 additional cages
-# ---------------------------
-cages = {}
-for i in range(3, 8):
-    df = sampling_c2.copy()
-    df['CAGE NUMBER'] = i
-    df['AVERAGE BODY WEIGHT (g)'] *= np.random.uniform(0.95, 1.05, len(df))
-    df['NUMBER OF FISH'] = (df['NUMBER OF FISH'] * np.random.uniform(0.98, 1.02, len(df))).astype(int)
-    cages[i] = df
-cages[cage_number] = sampling_c2
+# ==========================
+# 3. Compute Production Summary (UNCHANGED)
+# ==========================
+def compute_production_summary(feeding_df, harvest_df, sampling_df, transfer_df):
+    summary = {}
 
-# ---------------------------
-# 6. Compute FCR
-# ---------------------------
-def compute_fcr(sampling_df, feeding_df):
-    sampling_df = sampling_df.sort_values('DATE').reset_index(drop=True)
-    period_fcr = []
-    agg_fcr = []
-    total_feed = 0
-    start_weight = sampling_df.loc[0, 'NUMBER OF FISH'] * sampling_df.loc[0, 'AVERAGE BODY WEIGHT (g)'] / 1000
-    for i in range(1, len(sampling_df)):
-        period_feed = feeding_df[(feeding_df['DATE'] > sampling_df.loc[i-1, 'DATE']) &
-                                 (feeding_df['DATE'] <= sampling_df.loc[i, 'DATE'])]['FEED AMOUNT (Kg)'].sum()
-        total_feed += period_feed
-        prev_total_weight = sampling_df.loc[i-1, 'NUMBER OF FISH'] * sampling_df.loc[i-1, 'AVERAGE BODY WEIGHT (g)'] / 1000
-        curr_total_weight = sampling_df.loc[i, 'NUMBER OF FISH'] * sampling_df.loc[i, 'AVERAGE BODY WEIGHT (g)'] / 1000
-        weight_gain = curr_total_weight - prev_total_weight
-        period_fcr.append(period_feed / weight_gain if weight_gain>0 else np.nan)
-        agg_fcr.append(total_feed / (curr_total_weight - start_weight) if (curr_total_weight - start_weight)>0 else np.nan)
-    sampling_df = sampling_df.iloc[1:].copy()
-    sampling_df['Period FCR'] = period_fcr
-    sampling_df['Aggregated FCR'] = agg_fcr
-    return sampling_df
+    # Feeding aggregates
+    feed_summary = feeding_df.groupby("CAGE NUMBER")["FEED AMOUNT (Kg)"].sum().reset_index()
+    summary["feed"] = feed_summary
 
-summary_tables = {}
-for cage_id, df in cages.items():
-    feeding = feeding_df[feeding_df['CAGE NUMBER'] == cage_id]
-    summary_tables[cage_id] = compute_fcr(df, feeding)
+    # Harvest aggregates
+    harvest_summary = harvest_df.groupby("CAGE")[["NUMBER OF FISH", "TOTAL WEIGHT  [kg]"]].sum().reset_index()
+    summary["harvest"] = harvest_summary
 
-# ---------------------------
-# 7. Streamlit App
-# ---------------------------
+    # Sampling aggregates
+    if sampling_df.empty:
+        st.write("⚠️ No sampling data available. Skipping growth analysis.")
+    else:
+        sampling_summary = sampling_df.groupby("CAGE NUMBER")["AVERAGE BODY WEIGHT(g)"].mean().reset_index()
+        summary["sampling"] = sampling_summary
+
+    # Transfer aggregates
+    transfer_summary = transfer_df.groupby("DESTINATION CAGE")["NUMBER OF FISH"].sum().reset_index()
+    summary["transfer"] = transfer_summary
+
+    # Compute EFCR: Feed given / Harvested weight
+    efcr_df = pd.merge(feed_summary, harvest_summary, left_on="CAGE NUMBER", right_on="CAGE", how="left")
+    efcr_df["EFCR"] = efcr_df["FEED AMOUNT (Kg)"] / efcr_df["TOTAL WEIGHT  [kg]"].replace(0, pd.NA)
+    summary["efcr"] = efcr_df
+
+    return summary
+
+
+# ==========================
+# 4. Streamlit Interface
+# ==========================
 st.title("🐟 Fish Cage Production Analysis")
 
-cage_options = list(summary_tables.keys())
-selected_cage = st.selectbox("Select Cage", cage_options)
-kpi = st.selectbox("Select KPI", ['Growth', 'FCR'])
+# Sidebar uploaders
+st.sidebar.header("Upload Excel Files")
+feeding_file = st.sidebar.file_uploader("Feeding Record", type=["xlsx"])
+harvest_file = st.sidebar.file_uploader("Fish Harvest", type=["xlsx"])
+sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
+transfer_file = st.sidebar.file_uploader("Fish Transfer", type=["xlsx"])
 
-df = summary_tables[selected_cage]
+if feeding_file and harvest_file and sampling_file and transfer_file:
+    # Load raw data
+    feeding, harvest, sampling, transfer = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
 
-# Plot
-fig, ax = plt.subplots()
-if kpi == 'Growth':
-    ax.plot(df['DATE'], df['AVERAGE BODY WEIGHT (g)'], marker='o')
-    ax.set_ylabel("Average Body Weight (g)")
-    ax.set_title(f"Cage {selected_cage} Growth Over Time")
-else:
-    ax.plot(df['DATE'], df['Aggregated FCR'], marker='o', label='Aggregated FCR')
-    ax.plot(df['DATE'], df['Period FCR'], marker='x', label='Period FCR')
-    ax.set_ylabel("FCR")
-    ax.set_title(f"Cage {selected_cage} Feed Conversion Ratio")
-    ax.legend()
-ax.set_xlabel("Date")
-plt.xticks(rotation=45)
-st.pyplot(fig)
+    # Inspect missing values
+    st.subheader("🔍 Missing Values Check")
+    inspect_missing_values({
+        "Feeding": feeding,
+        "Harvest": harvest,
+        "Sampling": sampling,
+        "Transfer": transfer,
+    })
 
-# Show table
-st.subheader(f"Cage {selected_cage} Production Summary Table")
-st.dataframe(df)
+    # Clean & prepare data
+    feeding, harvest, sampling, transfer = clean_and_prepare(feeding, harvest, sampling, transfer)
 
-# ---------------------------
-# 8. Download buttons
-# ---------------------------
-# Excel download
-excel_buffer = BytesIO()
-with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-    df.to_excel(writer, index=False, sheet_name=f"Cage_{selected_cage}")
-st.download_button(
-    label="📥 Download Summary as Excel",
-    data=excel_buffer.getvalue(),
-    file_name=f"Cage_{selected_cage}_summary.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+    # Compute production summary
+    st.subheader("📊 Production Summary")
+    summary = compute_production_summary(feeding, harvest, sampling, transfer)
 
-# Plot download
-img_buffer = BytesIO()
-fig.savefig(img_buffer, format='png', bbox_inches='tight')
-st.download_button(
-    label="📥 Download Graph as PNG",
-    data=img_buffer.getvalue(),
-    file_name=f"Cage_{selected_cage}_{kpi}.png",
-    mime="image/png"
-)
+    # Display results
+    for key, df in summary.items():
+        st.write(f"#### {key.capitalize()} Summary")
+        st.dataframe(df)
