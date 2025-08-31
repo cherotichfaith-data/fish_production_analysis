@@ -13,14 +13,45 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file):
     sampling = pd.read_excel(sampling_file)
     transfers = pd.read_excel(transfer_file)
 
-    # ✅ Fix transfer file weight (convert g → kg if mistakenly entered)
-    if transfers["WEIGHT"].max() > 200:  # assume >200 means in grams
-        transfers["WEIGHT"] = transfers["WEIGHT"] / 1000
+    # Handle column name differences in transfers
+    weight_col_candidates = ["WEIGHT", "WEIGHT_KG", "Total weight [kg]", "AMOUNT", "FEED AMOUNT (Kg)"]
+    weight_col = None
+    for col in weight_col_candidates:
+        if col in transfers.columns:
+            weight_col = col
+            break
+    if weight_col is None:
+        raise KeyError(f"No weight column found in transfers. Columns: {transfers.columns.tolist()}")
+    
+    # Convert g -> kg if necessary
+    if transfers[weight_col].max() > 200:  # assume >200 means grams
+        transfers[weight_col] = transfers[weight_col] / 1000
+    transfers = transfers.rename(columns={weight_col: "WEIGHT"})
 
     return feeding, harvest, sampling, transfers
 
 # -------------------------------
-# 2. Preprocess Cage 2
+# 2. Handle missing values
+# -------------------------------
+def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df):
+    # Drop fully empty columns
+    feeding_df = feeding_df.dropna(axis=1, how="all")
+    harvest_df = harvest_df.dropna(axis=1, how="all")
+    sampling_df = sampling_df.dropna(axis=1, how="all")
+    transfer_df = transfer_df.dropna(axis=1, how="all")
+
+    # Fill non-critical missing values
+    feeding_df["FEED AMOUNT (Kg)"] = feeding_df["FEED AMOUNT (Kg)"].fillna(0)
+    feeding_df["FEEDING TYPE"] = feeding_df.get("FEEDING TYPE", "Unknown").fillna("Unknown")
+    feeding_df["feeding_response [very good, good, bad]"] = feeding_df.get("feeding_response [very good, good, bad]", "Unknown").fillna("Unknown")
+
+    transfer_df["NUMBER OF FISH"] = transfer_df.get("NUMBER OF FISH", 0).fillna(0)
+    transfer_df["ABW [g]"] = transfer_df.get("ABW [g]", 0).fillna(0)
+
+    return feeding_df, harvest_df, sampling_df, transfer_df
+
+# -------------------------------
+# 3. Preprocess Cage 2
 # -------------------------------
 def preprocess_cage2(feeding, harvest, sampling, transfers):
     cage_number = 2
@@ -30,7 +61,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers):
     sampling_c2 = sampling[sampling['CAGE NUMBER'] == cage_number].copy()
     transfers_c2 = transfers[transfers['FROM CAGE'] == cage_number].copy()
 
-    # ✅ Add stocking manually
+    # Add stocking manually
     stocking_date = pd.to_datetime("2024-08-26")
     stocked_fish = 7290
     initial_abw = 11.9
@@ -42,13 +73,13 @@ def preprocess_cage2(feeding, harvest, sampling, transfers):
     }])
     sampling_c2 = pd.concat([stocking_row, sampling_c2]).sort_values('DATE')
 
-    # ✅ Apply transfers (reduce fish & biomass after transfer dates)
+    # Apply transfers (outgoing)
     for _, row in transfers_c2.iterrows():
         transfer_date = pd.to_datetime(row['DATE'])
         transferred_fish = row['NUMBER OF FISH']
         sampling_c2.loc[sampling_c2['DATE'] >= transfer_date, 'NUMBER OF FISH'] -= transferred_fish
 
-    # ✅ Limit timeframe (final harvest = 09 July 2025)
+    # Limit timeframe (final harvest = 09 July 2025)
     start_date = pd.to_datetime("2024-08-26")
     end_date = pd.to_datetime("2025-07-09")
     sampling_c2 = sampling_c2[(sampling_c2['DATE'] >= start_date) & (sampling_c2['DATE'] <= end_date)]
@@ -57,7 +88,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers):
     return feeding_c2, harvest_c2, sampling_c2
 
 # -------------------------------
-# 3. Compute production summary
+# 4. Compute production summary
 # -------------------------------
 def compute_summary(feeding_c2, sampling_c2):
     feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'])
@@ -81,7 +112,7 @@ def compute_summary(feeding_c2, sampling_c2):
     return summary
 
 # -------------------------------
-# 4. Streamlit interface
+# 5. Streamlit interface
 # -------------------------------
 st.title("Fish Cage Production Analysis")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
@@ -93,17 +124,25 @@ transfer_file = st.sidebar.file_uploader("Fish Transfers", type=["xlsx"])
 
 if feeding_file and harvest_file and sampling_file and transfer_file:
     feeding, harvest, sampling, transfers = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
+    
+    # Check for missing values
+    st.write("### Missing Values")
+    st.write("Feeding dataframe:", feeding.isnull().sum())
+    st.write("Harvest dataframe:", harvest.isnull().sum())
+    st.write("Sampling dataframe:", sampling.isnull().sum())
+    st.write("Transfer dataframe:", transfers.isnull().sum())
+
+    # Handle missing values
+    feeding, harvest, sampling, transfers = clean_and_prepare(feeding, harvest, sampling, transfers)
 
     feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling, transfers)
     summary_c2 = compute_summary(feeding_c2, sampling_c2)
 
-    # Sidebar selectors
-    st.sidebar.header("Select Options")
+    # Sidebar selector
     selected_kpi = st.sidebar.selectbox("Select KPI", ["Growth", "eFCR"])
-
     df = summary_c2
 
-    # Display production summary table
+    # Display production summary
     st.subheader("Cage 2 Production Summary")
     st.dataframe(df[['DATE','NUMBER OF FISH','TOTAL_WEIGHT_KG','AGGREGATED_eFCR','PERIOD_eFCR']])
 
