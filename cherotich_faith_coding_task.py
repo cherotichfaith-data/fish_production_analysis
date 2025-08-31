@@ -4,18 +4,14 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-# ---------------------------
 # 1. Load data
-# ---------------------------
 def load_data(feeding_file, harvest_file, sampling_file):
     feeding = pd.read_excel(feeding_file)
     harvest = pd.read_excel(harvest_file)
     sampling = pd.read_excel(sampling_file)
     return feeding, harvest, sampling
 
-# ---------------------------
 # 2. Preprocess Cage 2
-# ---------------------------
 def preprocess_cage2(feeding, harvest, sampling):
     cage_number = 2
 
@@ -63,9 +59,8 @@ def preprocess_cage2(feeding, harvest, sampling):
 
     return feeding_c2, harvest_c2, sampling_c2
 
-# ---------------------------
+
 # 3. Compute production summary
-# ---------------------------
 def compute_summary(feeding_c2, sampling_c2):
     feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'])
     sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'])
@@ -93,9 +88,7 @@ def compute_summary(feeding_c2, sampling_c2):
 
     return summary
 
-# ---------------------------
 # 4. Create mock cages (3-7)
-# ---------------------------
 def create_mock_cage_data(summary_c2):
     mock_summaries = {}
     for cage_id in range(3, 8):
@@ -117,9 +110,7 @@ def create_mock_cage_data(summary_c2):
         mock_summaries[cage_id] = mock
     return mock_summaries
 
-# ---------------------------
 # 5. Streamlit Interface
-# ---------------------------
 st.title("Fish Cage Production Analysis")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
