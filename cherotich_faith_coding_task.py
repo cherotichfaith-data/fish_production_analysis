@@ -4,13 +4,13 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-# Load the data and check for missing values
-feeding_file = 'feeding record.xlsx'
-harvest_file = 'fish harvest.xlsx'
-sampling_file = 'fish sampling.xlsx'
-transfer_file = 'fish transfer.xlsx'
+def load_data(feeding_file, harvest_file, sampling_file, transfer_file):
+    feeding = pd.read_excel(feeding_file)
+    harvest = pd.read_excel(harvest_file)
+    sampling = pd.read_excel(sampling_file)
+    transfer = pd.read_excel(transfer_file)
+    return feeding, harvest, sampling, transfer
 
-feeding, harvest, sampling, transfer = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
 
 #Check for missing values
 print("Missing values in feeding dataframe:")
@@ -24,10 +24,6 @@ print(sampling.isnull().sum())
 
 print("\nMissing values in transfer dataframe:")
 print(transfer.isnull().sum())
-
-"""*   The most important features: date, cage, number of fish, weights do not have missing values
-*   Secondary columns like comments, feeding response, unnamed columns and weight estimates have missing values.
-"""
 
 #handling missing values
 def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df):
