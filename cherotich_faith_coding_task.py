@@ -12,11 +12,11 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file):
     sampling = pd.read_excel(sampling_file)
     transfers = pd.read_excel(transfer_file)
     
-    # Handle missing values
+    # Fill missing values
     feeding.fillna({'FEED AMOUNT (Kg)': 0}, inplace=True)
     sampling.fillna({'NUMBER OF FISH': 0, 'AVERAGE BODY WEIGHT (g)': 0}, inplace=True)
     harvest.fillna({'NUMBER OF FISH': 0, 'AVERAGE BODY WEIGHT (g)': 0}, inplace=True)
-    transfers.fillna({'NUMBER_FISH': 0, 'WEIGHT': 0}, inplace=True)
+    transfers.fillna({'NUMBER': 0, 'WEIGHT': 0}, inplace=True)
 
     # Correct transfer weights if given in grams
     if 'WEIGHT' in transfers.columns:
@@ -35,7 +35,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers):
     harvest_c2 = harvest[harvest['CAGE'] == cage_number].copy()
     sampling_c2 = sampling[sampling['CAGE NUMBER'] == cage_number].copy()
 
-    # Add stocking manually
+    # Add manual stocking
     stocking_date = pd.to_datetime("2024-08-26")
     stocked_fish = 7290
     initial_abw = 11.9
@@ -56,12 +56,12 @@ def preprocess_cage2(feeding, harvest, sampling, transfers):
     # Apply transfers out of Cage 2
     if transfers is not None and not transfers.empty:
         transfers_out = transfers[transfers['ORIGIN CAGE'] == cage_number].copy()
-        transfers_out['NUMBER_FISH'].fillna(0, inplace=True)
+        transfers_out['NUMBER'].fillna(0, inplace=True)
         for idx, row in transfers_out.iterrows():
             date_mask = sampling_c2['DATE'] >= pd.to_datetime(row['DATE'])
-            sampling_c2.loc[date_mask, 'NUMBER OF FISH'] -= row['NUMBER_FISH']
+            sampling_c2.loc[date_mask, 'NUMBER OF FISH'] -= row['NUMBER']
 
-    # Ensure no negative numbers
+    # Avoid negative fish count
     sampling_c2['NUMBER OF FISH'] = sampling_c2['NUMBER OF FISH'].clip(lower=0)
     return feeding_c2, harvest_c2, sampling_c2
 
