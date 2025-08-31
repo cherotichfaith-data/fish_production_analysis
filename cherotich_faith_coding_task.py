@@ -22,9 +22,9 @@ def preprocess_cage2(feeding, harvest, sampling):
     sampling_c2 = sampling[sampling['CAGE NUMBER'] == cage_number].copy()
 
     # Add stocking manually
-    stocking_date = pd.to_datetime("2024-07-16")
-    stocked_fish = 7902
-    initial_abw = 0.7
+    stocking_date = pd.to_datetime("2024-08-26")
+    stocked_fish = 7290
+    initial_abw = 11.9
     stocking_row = pd.DataFrame([{
         'DATE': stocking_date,
         'CAGE NUMBER': cage_number,
@@ -35,7 +35,7 @@ def preprocess_cage2(feeding, harvest, sampling):
 
     # Limit timeframe
     start_date = pd.to_datetime("2024-07-16")
-    end_date = pd.to_datetime("2025-06-30")
+    end_date = pd.to_datetime("2025-07-09")
     sampling_c2 = sampling_c2[(sampling_c2['DATE'] >= start_date) & (sampling_c2['DATE'] <= end_date)]
     feeding_c2 = feeding_c2[(feeding_c2['DATE'] >= start_date) & (feeding_c2['DATE'] <= end_date)]
 
@@ -83,7 +83,7 @@ def create_mock_cage_data(summary_c2):
         mock = summary_c2.copy()
         mock['CAGE NUMBER'] = cage_id
 
-        # Randomize weights ±5%, number of fish ±50, feed ±10%
+        # Randomize weights +-5%, number of fish +-50, feed +-10%
         mock['TOTAL_WEIGHT_KG'] *= np.random.normal(1, 0.05, size=len(mock))
         mock['NUMBER OF FISH'] = mock['NUMBER OF FISH'] + np.random.randint(-50, 50, size=len(mock))
         mock['CUM_FEED'] *= np.random.normal(1, 0.1, size=len(mock))
