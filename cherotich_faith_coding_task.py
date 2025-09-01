@@ -12,7 +12,7 @@ def load_data(feeding_file, harvest_file, sampling_file):
     return feeding, harvest, sampling
 
 # ===========================
-# 2. Preprocess Cage 2 Robustly
+# 2. Preprocess Cage 2 Robustly (Real Data Only)
 # ===========================
 def preprocess_cage2(feeding, harvest, sampling):
     cage_number = 2
@@ -43,6 +43,10 @@ def preprocess_cage2(feeding, harvest, sampling):
     sampling_c2['AVERAGE BODY WEIGHT (G)'] = pd.to_numeric(sampling_c2['AVERAGE BODY WEIGHT (G)'], errors='coerce').fillna(0)
     feeding_c2['FEED AMOUNT (KG)'] = pd.to_numeric(feeding_c2['FEED AMOUNT (KG)'], errors='coerce').fillna(0)
 
+    # Convert DATE column to datetime
+    sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'], errors='coerce')
+    feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'], errors='coerce')
+
     # Add initial stocking manually if not present
     stocking_date = pd.to_datetime("2024-08-26")
     stocked_fish = 7290
@@ -56,25 +60,11 @@ def preprocess_cage2(feeding, harvest, sampling):
         }])
         sampling_c2 = pd.concat([stocking_row, sampling_c2], ignore_index=True)
 
-    # Convert DATE column to datetime
-    sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'], errors='coerce')
-    feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'], errors='coerce')
-
     # Limit timeframe
     start_date = pd.to_datetime("2024-07-16")
     end_date = pd.to_datetime("2025-07-09")
     sampling_c2 = sampling_c2[(sampling_c2['DATE'] >= start_date) & (sampling_c2['DATE'] <= end_date)]
     feeding_c2 = feeding_c2[(feeding_c2['DATE'] >= start_date) & (feeding_c2['DATE'] <= end_date)]
-
-    # If feeding is empty, create synthetic daily feed
-    if feeding_c2.empty:
-        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-        feeding_c2 = pd.DataFrame({
-            'DATE': date_range,
-            'CAGE NUMBER': cage_number,
-            'FEED AMOUNT (KG)': np.random.uniform(5, 15, size=len(date_range))
-        })
-        feeding_c2['FEED AMOUNT (KG)'] = feeding_c2['FEED AMOUNT (KG)'].rolling(3, min_periods=1).mean()
 
     # Sort by date
     feeding_c2 = feeding_c2.sort_values('DATE').reset_index(drop=True)
@@ -91,16 +81,23 @@ def compute_summary(feeding_c2, sampling_c2):
     feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'], errors='coerce')
     sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'], errors='coerce')
 
+    # Ensure numeric columns
+    feeding_c2['FEED AMOUNT (KG)'] = pd.to_numeric(feeding_c2['FEED AMOUNT (KG)'], errors='coerce').fillna(0)
+    sampling_c2['NUMBER OF FISH'] = pd.to_numeric(sampling_c2['NUMBER OF FISH'], errors='coerce').fillna(0)
+    sampling_c2['AVERAGE BODY WEIGHT (G)'] = pd.to_numeric(sampling_c2['AVERAGE BODY WEIGHT (G)'], errors='coerce').fillna(0)
+
     # Compute cumulative feed
+    feeding_c2 = feeding_c2.sort_values('DATE').reset_index(drop=True)
     feeding_c2['CUM_FEED'] = feeding_c2['FEED AMOUNT (KG)'].cumsum()
 
     # Compute total biomass
+    sampling_c2 = sampling_c2.sort_values('DATE').reset_index(drop=True)
     sampling_c2['TOTAL_WEIGHT_KG'] = sampling_c2['NUMBER OF FISH'] * sampling_c2['AVERAGE BODY WEIGHT (G)'] / 1000
 
-    # Merge cumulative feed to sampling
+    # Merge cumulative feed to sampling using forward/backward fill
     summary = pd.merge_asof(
-        sampling_c2.sort_values('DATE'),
-        feeding_c2[['DATE', 'CUM_FEED']].sort_values('DATE'),
+        sampling_c2,
+        feeding_c2[['DATE', 'CUM_FEED']],
         on='DATE',
         direction='backward'
     )
@@ -112,8 +109,16 @@ def compute_summary(feeding_c2, sampling_c2):
     summary['PERIOD_FEED'] = summary['CUM_FEED'].diff().fillna(summary['CUM_FEED'])
     summary['PERIOD_eFCR'] = summary['PERIOD_FEED'] / (summary['PERIOD_WEIGHT_GAIN'] + epsilon)
 
-    return summary
+    # Round for readability
+    summary = summary.round({
+        'TOTAL_WEIGHT_KG': 2,
+        'AGGREGATED_eFCR': 2,
+        'PERIOD_WEIGHT_GAIN': 2,
+        'PERIOD_FEED': 2,
+        'PERIOD_eFCR': 2
+    })
 
+    return summary
 # 4. Create mock cages (3-7)
 def create_mock_cage_data(summary_c2):
     mock_summaries = {}
