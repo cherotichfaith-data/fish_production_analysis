@@ -351,62 +351,48 @@ def compute_summary(feeding_c2, sampling_c2):
     ]
     return summary[[c for c in cols if c in summary.columns]]
 
-#Mock Cages
-def generate_mock_cages_full(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
-    """
-    Generate mock cages with full production summary logic from Cage 2.
-    - Daily feeding: +/-10% variation
-    - Sampling ABW: +/-5%
-    - Harvest: +/-5%
-    - Computes growth, ΔBIOMASS, eFCR like Cage 2
-    """
+# Generate mock cages 
+def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
+    import numpy as np
+    import pandas as pd
+
+    mock_feeding = []
+    mock_sampling = []
+    mock_harvest = []
     mock_summaries = {}
 
     for cage in range(3, 3 + num_cages):  # Cage numbers 3,4,5,6,7
-        # ----- Feeding -----
+        # Feeding
         f = feeding_c2.copy()
-        f['CAGE NUMBER'] = cage
-        if 'FEED_PERIOD_KG' in f.columns:
-            f['FEED_PERIOD_KG'] = f['FEED_PERIOD_KG'] * np.random.uniform(0.9, 1.1, size=len(f))
-            f['FEED_AGG_KG'] = f['FEED_PERIOD_KG'].cumsum()
+        f['cage_number'] = cage
+        if 'feed_amount_kg' in f.columns:
+            f['feed_amount_kg'] = f['feed_amount_kg'] * np.random.uniform(0.9, 1.1, size=len(f))
+        mock_feeding.append(f)
 
-        # ----- Sampling -----
+        # Sampling
         s = sampling_c2.copy()
-        s['CAGE NUMBER'] = cage
-        if 'ABW_G' in s.columns:
-            s['ABW_G'] = s['ABW_G'] * np.random.uniform(0.95, 1.05, size=len(s))
+        s['cage_number'] = cage
+        if 'average_body_weight_g' in s.columns:
+            s['average_body_weight_g'] = s['average_body_weight_g'] * np.random.uniform(0.95, 1.05, size=len(s))
         if 'FISH_ALIVE' in s.columns:
             s['FISH_ALIVE'] = pd.to_numeric(s['FISH_ALIVE'], errors='coerce').fillna(0)
-        s['BIOMASS_KG'] = s['FISH_ALIVE'] * s['ABW_G'] / 1000.0
+        s['BIOMASS_KG'] = s['FISH_ALIVE'] * s['average_body_weight_g'] / 1000
+        mock_sampling.append(s)
 
-        # ----- Harvest -----
+        # Harvest
         h = harvest_c2.copy()
-        h['CAGE NUMBER'] = cage
-        if 'HARVEST_KG' in h.columns:
-            h['HARVEST_KG'] = h['HARVEST_KG'] * np.random.uniform(0.95, 1.05, size=len(h))
-        if 'HARVEST_FISH' in h.columns:
-            h['HARVEST_FISH'] = h['HARVEST_FISH'] * np.random.uniform(0.95, 1.05, size=len(h))
+        h['cage'] = cage
+        if 'total_weight_kg' in h.columns:
+            h['total_weight_kg'] = h['total_weight_kg'] * np.random.uniform(0.95, 1.05, size=len(h))
+        if 'number_of_fish' in h.columns:
+            h['number_of_fish'] = pd.to_numeric(h['number_of_fish'], errors='coerce').fillna(0)
+        mock_harvest.append(h)
 
-        # ----- Compute full summary like Cage 2 -----
-        summary = compute_summary(f, s)
-
-        # Manually adjust GROWTH_KG and eFCR for mock cage using harvest
-        summary["GROWTH_KG"] = (
-            summary["BIOMASS_KG"].diff().fillna(0)
-            + summary["HARVEST_KG"].fillna(0)
-        )
-        summary["PERIOD_eFCR"] = np.where(summary["GROWTH_KG"] > 0, summary["FEED_PERIOD_KG"] / summary["GROWTH_KG"], np.nan)
-        summary["AGGREGATED_eFCR"] = np.where(summary["GROWTH_KG"].cumsum() > 0, summary["FEED_AGG_KG"] / summary["GROWTH_KG"].cumsum(), np.nan)
-
-        # First row: period metrics NA
-        first_idx = summary.index.min()
-        for col in ["FEED_PERIOD_KG","ΔBIOMASS_STANDING","GROWTH_KG","PERIOD_eFCR"]:
-            if col in summary.columns:
-                summary.loc[first_idx, col] = np.nan
-
+        # Production summary – make sure cage2_production_summary is defined
+        summary = cage2_production_summary(f, s, h)
         mock_summaries[cage] = summary
 
-    return mock_summaries
+    return mock_feeding, mock_sampling, mock_harvest, mock_summaries
 
 # ===========================
 # Streamlit UI – Cage Selection + KPI
