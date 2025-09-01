@@ -351,10 +351,67 @@ def compute_summary(feeding_c2, sampling_c2):
     ]
     return summary[[c for c in cols if c in summary.columns]]
 
+#Mock Cages
+def generate_mock_cages_full(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
+    """
+    Generate mock cages with full production summary logic from Cage 2.
+    - Daily feeding: +/-10% variation
+    - Sampling ABW: +/-5%
+    - Harvest: +/-5%
+    - Computes growth, ΔBIOMASS, eFCR like Cage 2
+    """
+    mock_summaries = {}
+
+    for cage in range(3, 3 + num_cages):  # Cage numbers 3,4,5,6,7
+        # ----- Feeding -----
+        f = feeding_c2.copy()
+        f['CAGE NUMBER'] = cage
+        if 'FEED_PERIOD_KG' in f.columns:
+            f['FEED_PERIOD_KG'] = f['FEED_PERIOD_KG'] * np.random.uniform(0.9, 1.1, size=len(f))
+            f['FEED_AGG_KG'] = f['FEED_PERIOD_KG'].cumsum()
+
+        # ----- Sampling -----
+        s = sampling_c2.copy()
+        s['CAGE NUMBER'] = cage
+        if 'ABW_G' in s.columns:
+            s['ABW_G'] = s['ABW_G'] * np.random.uniform(0.95, 1.05, size=len(s))
+        if 'FISH_ALIVE' in s.columns:
+            s['FISH_ALIVE'] = pd.to_numeric(s['FISH_ALIVE'], errors='coerce').fillna(0)
+        s['BIOMASS_KG'] = s['FISH_ALIVE'] * s['ABW_G'] / 1000.0
+
+        # ----- Harvest -----
+        h = harvest_c2.copy()
+        h['CAGE NUMBER'] = cage
+        if 'HARVEST_KG' in h.columns:
+            h['HARVEST_KG'] = h['HARVEST_KG'] * np.random.uniform(0.95, 1.05, size=len(h))
+        if 'HARVEST_FISH' in h.columns:
+            h['HARVEST_FISH'] = h['HARVEST_FISH'] * np.random.uniform(0.95, 1.05, size=len(h))
+
+        # ----- Compute full summary like Cage 2 -----
+        summary = compute_summary(f, s)
+
+        # Manually adjust GROWTH_KG and eFCR for mock cage using harvest
+        summary["GROWTH_KG"] = (
+            summary["BIOMASS_KG"].diff().fillna(0)
+            + summary["HARVEST_KG"].fillna(0)
+        )
+        summary["PERIOD_eFCR"] = np.where(summary["GROWTH_KG"] > 0, summary["FEED_PERIOD_KG"] / summary["GROWTH_KG"], np.nan)
+        summary["AGGREGATED_eFCR"] = np.where(summary["GROWTH_KG"].cumsum() > 0, summary["FEED_AGG_KG"] / summary["GROWTH_KG"].cumsum(), np.nan)
+
+        # First row: period metrics NA
+        first_idx = summary.index.min()
+        for col in ["FEED_PERIOD_KG","ΔBIOMASS_STANDING","GROWTH_KG","PERIOD_eFCR"]:
+            if col in summary.columns:
+                summary.loc[first_idx, col] = np.nan
+
+        mock_summaries[cage] = summary
+
+    return mock_summaries
+
 # ===========================
-# 5. Streamlit UI
+# Streamlit UI – Cage Selection + KPI
 # ===========================
-st.title("Fish Cage Production Analysis (with Transfers)")
+st.title("Fish Cage Production Analysis Dashboard")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
 feeding_file  = st.sidebar.file_uploader("Feeding Record", type=["xlsx"])
@@ -363,13 +420,25 @@ sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
 transfer_file = st.sidebar.file_uploader("Fish Transfer (optional)", type=["xlsx"])
 
 if feeding_file and harvest_file and sampling_file:
+    # Load and preprocess Cage 2
     feeding, harvest, sampling, transfers = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
     feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling, transfers)
     summary_c2 = compute_summary(feeding_c2, sampling_c2)
 
-    st.subheader("Cage 2 – Production Summary (period-based)")
+    # Generate mock cages (Cages 3–7)
+    mock_feeding, mock_sampling, mock_harvest, mock_summaries = generate_mock_cages(feeding_c2, sampling_c2, harvest_c2)
     
-    # Enhanced column display with explicit date range
+    # Combine all summaries into a dictionary
+    all_summaries = {2: summary_c2, **mock_summaries}
+
+    # Sidebar: select cage and KPI
+    selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_summaries.keys()))
+    selected_kpi   = st.sidebar.selectbox("Select KPI", ["Biomass","ABW","eFCR"])
+    
+    summary_df = all_summaries[selected_cage]
+
+    # Display summary table
+    st.subheader(f"Cage {selected_cage} – Production Summary (period-based)")
     show_cols = [
         "DATE","NUMBER OF FISH","ABW_G","BIOMASS_KG",
         "FEED_PERIOD_KG","FEED_AGG_KG","GROWTH_KG",
@@ -378,40 +447,31 @@ if feeding_file and harvest_file and sampling_file:
         "FISH_COUNT_DISCREPANCY",
         "PERIOD_eFCR","AGGREGATED_eFCR",
     ]
-    
-    # Ensure the summary includes the full date range
-    display_summary = summary_c2[[c for c in show_cols if c in summary_c2.columns]]
-    
-    # Add date range info
+    display_summary = summary_df[[c for c in show_cols if c in summary_df.columns]]
+    st.dataframe(display_summary)
     st.write(f"**Analysis Period:** 26 Aug 2024 to 09 Jul 2025")
     st.write(f"**Data Points:** {len(display_summary)} records from {display_summary['DATE'].min().strftime('%d %b %Y')} to {display_summary['DATE'].max().strftime('%d %b %Y')}")
-    
-    st.dataframe(display_summary)
 
-    selected_kpi = st.sidebar.selectbox("Select KPI", ["Biomass","ABW","eFCR"])
-
+    # KPI Plots
     if selected_kpi == "Biomass":
-        fig = px.line(summary_c2.dropna(subset=["BIOMASS_KG"]), x="DATE", y="BIOMASS_KG", markers=True,
-                      title="Cage 2: Biomass Over Time (26 Aug 2024 - 09 Jul 2025)", labels={"BIOMASS_KG":"Total Biomass (kg)"})
-        # Set explicit date range for x-axis
+        fig = px.line(summary_df.dropna(subset=["BIOMASS_KG"]), x="DATE", y="BIOMASS_KG", markers=True,
+                      title=f"Cage {selected_cage}: Biomass Over Time", labels={"BIOMASS_KG":"Total Biomass (kg)"})
         fig.update_xaxes(range=[pd.to_datetime("2024-08-26"), pd.to_datetime("2025-07-09")])
         st.plotly_chart(fig, use_container_width=True)
         
     elif selected_kpi == "ABW":
-        fig = px.line(summary_c2.dropna(subset=["ABW_G"]), x="DATE", y="ABW_G", markers=True,
-                      title="Cage 2: Average Body Weight Over Time (26 Aug 2024 - 09 Jul 2025)", labels={"ABW_G":"ABW (g)"})
-        # Set explicit date range for x-axis
+        fig = px.line(summary_df.dropna(subset=["ABW_G"]), x="DATE", y="ABW_G", markers=True,
+                      title=f"Cage {selected_cage}: Average Body Weight Over Time", labels={"ABW_G":"ABW (g)"})
         fig.update_xaxes(range=[pd.to_datetime("2024-08-26"), pd.to_datetime("2025-07-09")])
         st.plotly_chart(fig, use_container_width=True)
         
     else:  # eFCR
-        dff = summary_c2.dropna(subset=["AGGREGATED_eFCR","PERIOD_eFCR"])
+        dff = summary_df.dropna(subset=["AGGREGATED_eFCR","PERIOD_eFCR"])
         fig = px.line(dff, x="DATE", y="AGGREGATED_eFCR", markers=True,
-                      title="Cage 2: eFCR Over Time (26 Aug 2024 - 09 Jul 2025)", labels={"AGGREGATED_eFCR":"Aggregated eFCR"})
+                      title=f"Cage {selected_cage}: eFCR Over Time", labels={"AGGREGATED_eFCR":"Aggregated eFCR"})
         fig.update_traces(showlegend=True, name="Aggregated eFCR")
         fig.add_scatter(x=dff["DATE"], y=dff["PERIOD_eFCR"], mode="lines+markers", name="Period eFCR", showlegend=True, line=dict(dash="dash"))
         fig.update_layout(yaxis_title="eFCR", legend_title_text="Legend")
-        # Set explicit date range for x-axis
         fig.update_xaxes(range=[pd.to_datetime("2024-08-26"), pd.to_datetime("2025-07-09")])
         st.plotly_chart(fig, use_container_width=True)
 else:
