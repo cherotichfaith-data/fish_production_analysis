@@ -91,8 +91,19 @@ def create_mock_cages(summary_c2, feeding_c2, sampling_c2):
     cage_ids = range(3, 8)
     sampling_dates = sampling_c2['DATE'].tolist()
 
-    start_date = feeding_c2['DATE'].min()
-    end_date = feeding_c2['DATE'].max()
+    # Determine date range safely
+    if not feeding_c2.empty:
+        start_date = feeding_c2['DATE'].min()
+        end_date = feeding_c2['DATE'].max()
+    else:
+        # fallback to sampling_c2 if feeding is empty
+        start_date = sampling_c2['DATE'].min()
+        end_date = sampling_c2['DATE'].max()
+
+    # If still NaT (both empty), raise a clear error
+    if pd.isna(start_date) or pd.isna(end_date):
+        raise ValueError("Cannot generate mock cages: No valid dates found in feeding or sampling data.")
+
     date_range = pd.date_range(start=start_date, end=end_date, freq='D')
 
     for cage_id in cage_ids:
@@ -130,6 +141,7 @@ def create_mock_cages(summary_c2, feeding_c2, sampling_c2):
         mock_summaries[cage_id] = summary
 
     return mock_summaries
+
 
 # -------------------------------
 # 5. Streamlit Interface
