@@ -182,30 +182,27 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
 
     return feeding_c2, harvest_c2, base
 
-#Compute summary
 def compute_summary(feeding_c2, sampling_c2):
     import pandas as pd
     import numpy as np
 
-    # Copy to avoid modifying original
     feeding_c2 = feeding_c2.copy()
     s = sampling_c2.copy().sort_values("DATE")
 
-    # Identify key columns
-    feed_col = None
-    for c in ["FEED AMOUNT (KG)","FEED AMOUNT (Kg)","FEED (KG)","FEED KG","FEED_AMOUNT","FEED"]:
-        if c in feeding_c2.columns:
-            feed_col = c
-            break
+    # Standardize ABW column
+    abw_candidates = ["AVERAGE BODY WEIGHT(G)","AVERAGE BODY WEIGHT (G)","ABW(G)","ABW [G]","ABW"]
+    abw_col = next((c for c in abw_candidates if c in s.columns), None)
+    if abw_col is None:
+        s["ABW_G"] = np.nan
+    else:
+        s.rename(columns={abw_col: "ABW_G"}, inplace=True)
 
-    abw_col = None
-    for c in ["AVERAGE BODY WEIGHT(G)","AVERAGE BODY WEIGHT (G)","ABW(G)","ABW [G]","ABW"]:
-        if c in s.columns:
-            abw_col = c
-            break
-
-    if feed_col is None or abw_col is None:
-        return s  # Return sampling if key columns missing
+    # Standardize feed column
+    feed_candidates = ["FEED AMOUNT (KG)","FEED AMOUNT (Kg)","FEED (KG)","FEED KG","FEED_AMOUNT","FEED"]
+    feed_col = next((c for c in feed_candidates if c in feeding_c2.columns), None)
+    if feed_col is None:
+        feeding_c2["FEED"] = 0
+        feed_col = "FEED"
 
     # Cumulative feed
     feeding_c2 = feeding_c2.sort_values("DATE")
@@ -219,9 +216,12 @@ def compute_summary(feeding_c2, sampling_c2):
         direction="backward"
     )
 
-    # Standing biomass
-    summary["ABW_G"] = pd.to_numeric(summary[abw_col], errors="coerce")
-    summary["BIOMASS_KG"] = summary.get("FISH_ALIVE", 0) * summary["ABW_G"].fillna(0) / 1000.0
+    # Ensure FISH_ALIVE exists
+    if "FISH_ALIVE" not in summary.columns:
+        summary["FISH_ALIVE"] = summary.get("NUMBER OF FISH", np.nan).fillna(0)
+
+    # Compute biomass safely
+    summary["BIOMASS_KG"] = summary["FISH_ALIVE"] * summary["ABW_G"].fillna(0) / 1000.0
 
     # Period deltas
     summary["FEED_PERIOD_KG"]    = summary["CUM_FEED"].diff()
@@ -234,10 +234,7 @@ def compute_summary(feeding_c2, sampling_c2):
         ("OUT_KG_CUM","TRANSFER_OUT_KG"),
         ("HARV_KG_CUM","HARVEST_KG")
     ]:
-        if cum_col in summary.columns:
-            summary[per_col] = summary[cum_col].diff()
-        else:
-            summary[per_col] = np.nan
+        summary[per_col] = summary[cum_col].diff() if cum_col in summary.columns else np.nan
 
     # Period logistics (fish)
     for cum_col, per_col in [
@@ -245,12 +242,9 @@ def compute_summary(feeding_c2, sampling_c2):
         ("OUT_FISH_CUM","TRANSFER_OUT_FISH"),
         ("HARV_FISH_CUM","HARVEST_FISH")
     ]:
-        if cum_col in summary.columns:
-            summary[per_col] = summary[cum_col].diff()
-        else:
-            summary[per_col] = np.nan
+        summary[per_col] = summary[cum_col].diff() if cum_col in summary.columns else np.nan
 
-    # Period growth (kg) accounting for transfers & harvest
+    # Period growth
     summary["GROWTH_KG"] = (
         summary["ΔBIOMASS_STANDING"].fillna(0)
         + summary["HARVEST_KG"].fillna(0)
@@ -268,7 +262,7 @@ def compute_summary(feeding_c2, sampling_c2):
     actual_fish = pd.to_numeric(summary.get("NUMBER OF FISH", 0), errors="coerce").fillna(0)
     summary["FISH_COUNT_DISCREPANCY"] = summary["EXPECTED_FISH_ALIVE"] - actual_fish
 
-    # Period & aggregated eFCR
+    # eFCR
     growth_cum = summary["GROWTH_KG"].cumsum()
     summary["PERIOD_eFCR"]     = np.where(summary["GROWTH_KG"] > 0, summary["FEED_PERIOD_KG"] / summary["GROWTH_KG"], np.nan)
     summary["AGGREGATED_eFCR"] = np.where(growth_cum > 0, summary["FEED_AGG_KG"] / growth_cum, np.nan)
@@ -276,14 +270,15 @@ def compute_summary(feeding_c2, sampling_c2):
     # First row → NA for period metrics
     if not summary.empty:
         first_idx = summary.index.min()
-        summary.loc[first_idx, [
+        for col in [
             "FEED_PERIOD_KG","ΔBIOMASS_STANDING",
             "TRANSFER_IN_KG","TRANSFER_OUT_KG","HARVEST_KG",
             "TRANSFER_IN_FISH","TRANSFER_OUT_FISH",
             "GROWTH_KG","PERIOD_eFCR","FISH_COUNT_DISCREPANCY"
-        ]] = np.nan
+        ]:
+            summary.loc[first_idx, col] = np.nan
 
-    # Final column order
+    # Column order
     cols = [
         "DATE","CAGE NUMBER","NUMBER OF FISH","ABW_G","BIOMASS_KG",
         "FEED_PERIOD_KG","FEED_AGG_KG","GROWTH_KG",
@@ -314,17 +309,39 @@ if feeding_file and harvest_file and sampling_file:
     st.dataframe(summary_c2)
 
     selected_kpi = st.sidebar.selectbox("Select KPI", ["Biomass","ABW","eFCR"])
+
+    # Helper to create empty chart
+    def empty_chart(y_label):
+        fig = px.line(x=[], y=[], title="No data available")
+        fig.update_layout(yaxis_title=y_label, xaxis_title="Date")
+        return fig
+
+    # --- Robust plotting
     if selected_kpi == "Biomass":
-        fig = px.line(summary_c2.dropna(subset=["BIOMASS_KG"]), x="DATE", y="BIOMASS_KG", markers=True,
-                      title="Cage 2: Biomass Over Time", labels={"BIOMASS_KG":"Total Biomass (kg)"})
+        if "BIOMASS_KG" in summary_c2.columns and not summary_c2["BIOMASS_KG"].isna().all():
+            fig = px.line(summary_c2.dropna(subset=["BIOMASS_KG"]), x="DATE", y="BIOMASS_KG", markers=True,
+                          title="Cage 2: Biomass Over Time", labels={"BIOMASS_KG":"Total Biomass (kg)"})
+        else:
+            fig = empty_chart("Total Biomass (kg)")
         st.plotly_chart(fig, use_container_width=True)
+        
     elif selected_kpi == "ABW":
-        fig = px.line(summary_c2.dropna(subset=["ABW_G"]), x="DATE", y="ABW_G", markers=True,
-                      title="Cage 2: Average Body Weight Over Time", labels={"ABW_G":"ABW (g)"})
+        if "ABW_G" in summary_c2.columns and not summary_c2["ABW_G"].isna().all():
+            fig = px.line(summary_c2.dropna(subset=["ABW_G"]), x="DATE", y="ABW_G", markers=True,
+                          title="Cage 2: Average Body Weight Over Time", labels={"ABW_G":"ABW (g)"})
+        else:
+            fig = empty_chart("ABW (g)")
         st.plotly_chart(fig, use_container_width=True)
+        
     else:
-        dff = summary_c2.dropna(subset=["AGGREGATED_eFCR","PERIOD_eFCR"])
-        fig = px.line(dff, x="DATE", y="AGGREGATED_eFCR", markers=True, title="Cage 2: eFCR Over Time")
-        fig.add_scatter(x=dff["DATE"], y=dff["PERIOD_eFCR"], mode="lines+markers", name="Period eFCR", line=dict(dash="dash"))
-        fig.update_layout(yaxis_title="eFCR", legend_title_text="Legend")
+        if ("AGGREGATED_eFCR" in summary_c2.columns and 
+            "PERIOD_eFCR" in summary_c2.columns and
+            not summary_c2[["AGGREGATED_eFCR","PERIOD_eFCR"]].isna().all().all()):
+            
+            dff = summary_c2.dropna(subset=["AGGREGATED_eFCR","PERIOD_eFCR"])
+            fig = px.line(dff, x="DATE", y="AGGREGATED_eFCR", markers=True, title="Cage 2: eFCR Over Time")
+            fig.add_scatter(x=dff["DATE"], y=dff["PERIOD_eFCR"], mode="lines+markers", name="Period eFCR", line=dict(dash="dash"))
+            fig.update_layout(yaxis_title="eFCR", legend_title_text="Legend")
+        else:
+            fig = empty_chart("eFCR")
         st.plotly_chart(fig, use_container_width=True)
