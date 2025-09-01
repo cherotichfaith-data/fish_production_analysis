@@ -166,7 +166,7 @@ if feeding_file and harvest_file and sampling_file:
     df['AGGREGATED_eFCR'] = pd.to_numeric(df['AGGREGATED_eFCR'], errors='coerce')
     df['PERIOD_eFCR'] = pd.to_numeric(df['PERIOD_eFCR'], errors='coerce')
     df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.dropna(subset=['DATE','TOTAL_WEIGHT_KG','AGGREGATED_eFCR','PERIOD_eFCR'], how='any')
+    df = df.dropna(subset=['DATE','AGGREGATED_eFCR','PERIOD_eFCR'])
 
     # Display production summary table
     st.subheader(f"Cage {selected_cage} Production Summary")
@@ -183,7 +183,8 @@ if feeding_file and harvest_file and sampling_file:
                       labels={'TOTAL_WEIGHT_KG': 'Total Weight (Kg)'})
         st.plotly_chart(fig, use_container_width=True)
     else:
-        fig = px.line(df, x='DATE', y='AGGREGATED_eFCR', markers=True, name='Agg eFCR')
+        fig = px.line(df, x='DATE', y='AGGREGATED_eFCR', markers=True)  # remove name here
         fig.add_scatter(x=df['DATE'], y=df['PERIOD_eFCR'], mode='lines+markers', name='Period eFCR')
-        fig.update_layout(title=f'Cage {selected_cage}: eFCR Over Time', yaxis_title='eFCR')
+        fig.update_layout(title=f'Cage {selected_cage}: eFCR Over Time',
+                  yaxis_title='eFCR')
         st.plotly_chart(fig, use_container_width=True)
