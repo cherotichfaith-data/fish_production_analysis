@@ -220,26 +220,32 @@ if feeding_file and harvest_file and sampling_file:
     st.dataframe(df[['date','FISH_ALIVE','BIOMASS_KG','PERIOD_FEED_KG',
                      'CUM_FEED_KG','PERIOD_eFCR','AGGREGATED_eFCR']].round(2))
 
-    # Plot KPI
-    if selected_kpi=="Growth":
-        fig = px.line(df, x='date', y='BIOMASS_KG', markers=True,
-                      title=f'Cage {selected_cage} Biomass Growth',
-                      labels={'BIOMASS_KG':'Biomass (Kg)','date':'Date'})
+# Plot KPI
+# --------------------------
+if selected_kpi == "Growth":
+    fig = px.line(df, x='date', y='BIOMASS_KG',
+                  markers=True,
+                  title=f'Cage {selected_cage} Biomass Growth',
+                  labels={'BIOMASS_KG':'Biomass (Kg)','date':'Date'})
+    st.plotly_chart(fig)
+else:
+    # Ensure numeric & drop NaNs
+    df_plot = df.copy()
+    df_plot['AGGREGATED_eFCR'] = pd.to_numeric(df_plot['AGGREGATED_eFCR'], errors='coerce')
+    df_plot['PERIOD_eFCR'] = pd.to_numeric(df_plot['PERIOD_eFCR'], errors='coerce')
+    df_plot = df_plot.dropna(subset=['AGGREGATED_eFCR','PERIOD_eFCR'], how='all')
+
+    if not df_plot.empty:
+        # Start with Aggregated eFCR
+        fig = px.line(df_plot, x='date', y='AGGREGATED_eFCR',
+                      markers=True,
+                      title=f'Cage {selected_cage} eFCR Over Time',
+                      labels={'AGGREGATED_eFCR':'Aggregated eFCR','date':'Date'})
+        # Add Period eFCR as additional trace
+        fig.add_scatter(x=df_plot['date'], y=df_plot['PERIOD_eFCR'],
+                        mode='lines+markers', name='Period eFCR')
         st.plotly_chart(fig)
     else:
-        # Ensure numeric & drop NaNs
-        df_plot = df.copy()
-        df_plot['AGGREGATED_eFCR'] = pd.to_numeric(df_plot['AGGREGATED_eFCR'], errors='coerce')
-        df_plot['PERIOD_eFCR'] = pd.to_numeric(df_plot['PERIOD_eFCR'], errors='coerce')
-        df_plot = df_plot.dropna(subset=['AGGREGATED_eFCR','PERIOD_eFCR'], how='all')
-
-        if not df_plot.empty:
-            fig = px.line(df_plot, x='date', y='AGGREGATED_eFCR', markers=True, name='Aggregated eFCR')
-            fig.add_scatter(x=df_plot['date'], y=df_plot['PERIOD_eFCR'], mode='lines+markers', name='Period eFCR')
-            fig.update_layout(title=f'Cage {selected_cage} eFCR Over Time',
-                              yaxis_title='eFCR', xaxis_title='Date')
-            st.plotly_chart(fig)
-        else:
-            st.warning("No eFCR data available to plot for this cage.")
+        st.warning("No eFCR data available to plot for this cage.")
 else:
     st.info("Please upload all required Excel files to start the analysis.")
