@@ -295,4 +295,3 @@ if feeding_file and harvest_file and sampling_file:
         fig.add_scatter(x=dff["DATE"], y=dff["PERIOD_eFCR"], mode="lines+markers", name="Period eFCR", line=dict(dash="dash"))
         fig.update_layout(yaxis_title="eFCR", legend_title_text="Legend")
         st.plotly_chart(fig, use_container_width=True)
-
