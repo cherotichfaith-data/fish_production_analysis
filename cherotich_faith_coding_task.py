@@ -11,10 +11,13 @@ import plotly.express as px
 # 1. Load Data Function
 # --------------------------
 def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
-    feeding = pd.read_excel(feeding_file)
-    harvest = pd.read_excel(harvest_file)
-    sampling = pd.read_excel(sampling_file)
-    transfer = pd.read_excel(transfer_file) if transfer_file else pd.DataFrame()
+    feeding = pd.read_excel(feeding_file, parse_dates=['date'], dayfirst=True)
+    harvest = pd.read_excel(harvest_file, parse_dates=['date'], dayfirst=True)
+    sampling = pd.read_excel(sampling_file, parse_dates=['date'], dayfirst=True)
+    if transfer_file is not None:
+        transfer = pd.read_excel(transfer_file, parse_dates=['date'], dayfirst=True)
+    else:
+        transfer = pd.DataFrame()
     return feeding, harvest, sampling, transfer
 
 # --------------------------
@@ -26,7 +29,8 @@ def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df):
 
     def standardize_columns(df):
         df.columns = (
-            df.columns.astype(str)
+            df.columns
+            .astype(str)
             .str.strip()
             .str.lower()
             .str.replace(' ', '_')
@@ -47,7 +51,7 @@ def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df):
 
     for df in [feeding_df, harvest_df, sampling_df, transfer_df]:
         if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            df['date'] = pd.to_datetime(df['date'], errors='coerce', dayfirst=True)
 
     return feeding_df, harvest_df, sampling_df, transfer_df
 
@@ -56,8 +60,8 @@ def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df):
 # --------------------------
 def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     cage_number = 2
-    start_date = pd.to_datetime("2024-08-26")
-    end_date = pd.to_datetime("2025-07-09")
+    start_date = pd.to_datetime("2024-08-26", dayfirst=True)
+    end_date = pd.to_datetime("2025-07-09", dayfirst=True)
 
     feeding_c2 = feeding[(feeding['cage_number']==cage_number) & 
                          (feeding['date']>=start_date) & (feeding['date']<=end_date)].copy()
@@ -79,9 +83,10 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     }])
     sampling_c2 = pd.concat([stocking_row, sampling_c2]).sort_values('date').reset_index(drop=True)
 
-    # Transfers
+    # Initialize transfer columns
     sampling_c2['IN_FISH'] = 0
     sampling_c2['OUT_FISH'] = 0
+
     if transfers is not None and not transfers.empty:
         transfers_c2 = transfers[(transfers['date']>=start_date) & (transfers['date']<=end_date)]
         # Outgoing
@@ -89,18 +94,20 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
         if out_mask.any():
             out_transfers = transfers_c2[out_mask].groupby('date')['number_of_fish'].sum().cumsum().reset_index()
             out_transfers.rename(columns={'number_of_fish':'OUT_FISH'}, inplace=True)
-            sampling_c2 = pd.merge_asof(sampling_c2.sort_values('date'), out_transfers.sort_values('date'),
+            sampling_c2 = pd.merge_asof(sampling_c2.sort_values('date'), 
+                                        out_transfers.sort_values('date'),
                                         on='date', direction='backward')
         # Incoming
         in_mask = transfers_c2.get('destination_cage', pd.Series()) == cage_number
         if in_mask.any():
             in_transfers = transfers_c2[in_mask].groupby('date')['number_of_fish'].sum().cumsum().reset_index()
             in_transfers.rename(columns={'number_of_fish':'IN_FISH'}, inplace=True)
-            sampling_c2 = pd.merge_asof(sampling_c2.sort_values('date'), in_transfers.sort_values('date'),
+            sampling_c2 = pd.merge_asof(sampling_c2.sort_values('date'), 
+                                        in_transfers.sort_values('date'),
                                         on='date', direction='backward')
-
         sampling_c2[['IN_FISH','OUT_FISH']] = sampling_c2[['IN_FISH','OUT_FISH']].fillna(0)
 
+    # Compute fish alive & biomass
     sampling_c2['FISH_ALIVE'] = (sampling_c2['number_of_fish'] + sampling_c2['IN_FISH'] - sampling_c2['OUT_FISH']).clip(lower=0)
     sampling_c2['BIOMASS_KG'] = sampling_c2['FISH_ALIVE'] * sampling_c2['average_body_weight_g'] / 1000
 
@@ -138,26 +145,33 @@ def cage2_production_summary(feeding_c2, sampling_c2, harvest_c2):
 # 5. Generate Mock Cages
 # --------------------------
 def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
-    mock_summaries = {}
+    mock_feeding, mock_sampling, mock_harvest, mock_summaries = [],[],[],{}
     for cage in range(3,3+num_cages):
         f = feeding_c2.copy()
         f['cage_number'] = cage
-        f['feed_amount_kg'] *= np.random.uniform(0.9,1.1,size=len(f))
+        if 'feed_amount_kg' in f.columns:
+            f['feed_amount_kg'] *= np.random.uniform(0.9,1.1,size=len(f))
+        mock_feeding.append(f)
 
         s = sampling_c2.copy()
         s['cage_number'] = cage
-        s['average_body_weight_g'] *= np.random.uniform(0.95,1.05,size=len(s))
+        if 'average_body_weight_g' in s.columns:
+            s['average_body_weight_g'] *= np.random.uniform(0.95,1.05,size=len(s))
         s['FISH_ALIVE'] = pd.to_numeric(s['FISH_ALIVE'], errors='coerce').fillna(0)
         s['BIOMASS_KG'] = s['FISH_ALIVE']*s['average_body_weight_g']/1000
+        mock_sampling.append(s)
 
         h = harvest_c2.copy()
         h['cage'] = cage
-        h['total_weight_kg'] *= np.random.uniform(0.95,1.05,size=len(h))
-        h['number_of_fish'] = pd.to_numeric(h['number_of_fish'], errors='coerce').fillna(0)
+        if 'total_weight_kg' in h.columns:
+            h['total_weight_kg'] *= np.random.uniform(0.95,1.05,size=len(h))
+        if 'number_of_fish' in h.columns:
+            h['number_of_fish'] = pd.to_numeric(h['number_of_fish'], errors='coerce').fillna(0)
+        mock_harvest.append(h)
 
         summary = cage2_production_summary(f,s,h)
         mock_summaries[cage] = summary
-    return mock_summaries
+    return mock_feeding,mock_sampling,mock_harvest,mock_summaries
 
 # --------------------------
 # 6. Streamlit Interface
@@ -172,18 +186,19 @@ transfer_file = st.sidebar.file_uploader("Fish Transfer (optional)", type=["xlsx
 
 if feeding_file and harvest_file and sampling_file:
     feeding, harvest, sampling, transfer = clean_and_prepare(
-        pd.read_excel(feeding_file),
-        pd.read_excel(harvest_file),
-        pd.read_excel(sampling_file),
-        pd.read_excel(transfer_file) if transfer_file else pd.DataFrame()
+        pd.read_excel(feeding_file, parse_dates=['date'], dayfirst=True),
+        pd.read_excel(harvest_file, parse_dates=['date'], dayfirst=True),
+        pd.read_excel(sampling_file, parse_dates=['date'], dayfirst=True),
+        pd.read_excel(transfer_file, parse_dates=['date'], dayfirst=True) if transfer_file else pd.DataFrame()
     )
 
     feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling, transfer)
     summary_c2 = cage2_production_summary(feeding_c2, sampling_c2, harvest_c2)
-    mock_summaries = generate_mock_cages(feeding_c2, sampling_c2, harvest_c2)
+    _, _, _, mock_summaries = generate_mock_cages(feeding_c2, sampling_c2, harvest_c2)
 
     all_cages = {2: summary_c2, **mock_summaries}
 
+    # Sidebar selectors
     st.sidebar.header("Options")
     selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_cages.keys()))
     selected_kpi = st.sidebar.selectbox("Select KPI", ["Growth", "eFCR"])
@@ -201,11 +216,7 @@ if feeding_file and harvest_file and sampling_file:
                       labels={'BIOMASS_KG':'Biomass (Kg)','date':'Date'})
         st.plotly_chart(fig)
     else:
-        df_plot = df.copy()
-        df_plot['AGGREGATED_eFCR'] = pd.to_numeric(df_plot['AGGREGATED_eFCR'], errors='coerce')
-        df_plot['PERIOD_eFCR'] = pd.to_numeric(df_plot['PERIOD_eFCR'], errors='coerce')
-        df_plot = df_plot.dropna(subset=['AGGREGATED_eFCR','PERIOD_eFCR'], how='all')
-
+        df_plot = df.dropna(subset=['AGGREGATED_eFCR','PERIOD_eFCR'], how='all')
         if not df_plot.empty:
             fig = px.line(df_plot, x='date', y='AGGREGATED_eFCR',
                           markers=True,
