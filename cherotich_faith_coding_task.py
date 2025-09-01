@@ -83,7 +83,9 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     start_date = pd.to_datetime("2024-08-26")
     end_date   = pd.to_datetime("2025-07-09")
 
-    # Clip function for window
+    # ----------------------
+    # Clip function for timeframe
+    # ----------------------
     def _clip(df):
         if df is None or df.empty or "DATE" not in df.columns:
             return pd.DataFrame()
@@ -94,62 +96,93 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     harvest_c2  = _clip(harvest[harvest["CAGE NUMBER"] == cage_number])   if "CAGE NUMBER" in harvest.columns else _clip(harvest)
     sampling_c2 = _clip(sampling[sampling["CAGE NUMBER"] == cage_number]) if "CAGE NUMBER" in sampling.columns else _clip(sampling)
 
-    # --- Stocking row
+    # ----------------------
+    # Stocking row
+    # ----------------------
     stocked_fish = 7290
     initial_abw_g = 11.9
     stocking_row = pd.DataFrame([{
         "DATE": start_date,
         "CAGE NUMBER": cage_number,
-        "AVERAGE BODY WEIGHT(G)": initial_abw_g
+        "ABW_G": initial_abw_g,
+        "STOCKED": stocked_fish,
+        "FISH_ALIVE": stocked_fish
     }])
 
-    # Combine sampling with stocking
-    base = pd.concat([stocking_row, sampling_c2], ignore_index=True).sort_values("DATE").reset_index(drop=True)
-    base["STOCKED"] = stocked_fish
+    # ----------------------
+    # Combine sampling + stocking
+    # ----------------------
+    if "AVERAGE BODY WEIGHT(G)" in sampling_c2.columns:
+        sampling_c2.rename(columns={"AVERAGE BODY WEIGHT(G)": "ABW_G"}, inplace=True)
 
-    # --- Ensure cumulative columns exist
+    base = pd.concat([stocking_row, sampling_c2], ignore_index=True).sort_values("DATE").reset_index(drop=True)
+
+    # Initialize cumulative columns
     for col in ["HARV_FISH_CUM","HARV_KG_CUM","IN_FISH_CUM","IN_KG_CUM","OUT_FISH_CUM","OUT_KG_CUM"]:
         if col not in base.columns:
             base[col] = 0.0
 
-    # --- Harvest cumulatives
+    # ----------------------
+    # Harvest cumulatives
+    # ----------------------
     if not harvest_c2.empty:
-        h_fish_col = "NUMBER OF FISH" if "NUMBER OF FISH" in harvest_c2.columns else None
-        h_kg_col   = "TOTAL WEIGHT (KG)" if "TOTAL WEIGHT (KG)" in harvest_c2.columns else None
+        h_fish_col = next((c for c in harvest_c2.columns if "FISH" in c.upper()), None)
+        h_kg_col   = next((c for c in harvest_c2.columns if "WEIGHT" in c.upper()), None)
         h = harvest_c2.copy()
-        h["H_FISH"] = pd.to_numeric(h[h_fish_col], errors="coerce").fillna(0) if h_fish_col else 0
-        h["H_KG"]   = pd.to_numeric(h[h_kg_col],   errors="coerce").fillna(0) if h_kg_col   else 0
-        h["HARV_FISH_CUM"], h["HARV_KG_CUM"] = h["H_FISH"].cumsum(), h["H_KG"].cumsum()
+        if h_fish_col:
+            h["H_FISH"] = pd.to_numeric(h[h_fish_col], errors="coerce").fillna(0)
+        else:
+            h["H_FISH"] = 0
+        if h_kg_col:
+            h["H_KG"] = pd.to_numeric(h[h_kg_col], errors="coerce").fillna(0)
+        else:
+            h["H_KG"] = 0
+        h["HARV_FISH_CUM"] = h["H_FISH"].cumsum()
+        h["HARV_KG_CUM"]   = h["H_KG"].cumsum()
         mh = pd.merge_asof(base[["DATE"]], h[["DATE","HARV_FISH_CUM","HARV_KG_CUM"]], on="DATE", direction="backward")
         base["HARV_FISH_CUM"] = mh["HARV_FISH_CUM"].fillna(0)
         base["HARV_KG_CUM"]   = mh["HARV_KG_CUM"].fillna(0)
 
-    # --- Transfers cumulatives (exclude first inbound stocking transfer)
+    # ----------------------
+    # Transfers cumulatives
+    # ----------------------
     if transfers is not None and not transfers.empty:
         t = _clip(transfers)
         if not t.empty:
-            # Incoming and outgoing
             for flow, col_prefix in [("ORIGIN", "OUT"), ("DESTINATION", "IN")]:
                 cage_col = f"{flow} CAGE"
-                fish_col = "NUMBER OF FISH" if "NUMBER OF FISH" in t.columns else None
-                kg_col   = "TOTAL WEIGHT (KG)" if "TOTAL WEIGHT (KG)" in t.columns else None
+                fish_col = next((c for c in t.columns if "FISH" in c.upper()), None)
+                kg_col   = next((c for c in t.columns if "WEIGHT" in c.upper()), None)
                 mask = (t[cage_col] == cage_number) if cage_col in t.columns else pd.Series(False, index=t.index)
                 sub = t[mask].copy()
                 if not sub.empty:
                     sub["T_FISH"] = pd.to_numeric(sub[fish_col], errors="coerce").fillna(0) if fish_col else 0
                     sub["T_KG"]   = pd.to_numeric(sub[kg_col], errors="coerce").fillna(0) if kg_col else 0
+                    # Convert grams → kg if needed
+                    sub["T_KG"] = sub["T_KG"].apply(lambda x: x/1000 if x > 100 else x)
                     sub[f"{col_prefix}_FISH_CUM"] = sub["T_FISH"].cumsum()
                     sub[f"{col_prefix}_KG_CUM"]   = sub["T_KG"].cumsum()
                     merged = pd.merge_asof(base[["DATE"]], sub[["DATE", f"{col_prefix}_FISH_CUM", f"{col_prefix}_KG_CUM"]], on="DATE", direction="backward")
                     base[f"{col_prefix}_FISH_CUM"] = merged[f"{col_prefix}_FISH_CUM"].fillna(0)
                     base[f"{col_prefix}_KG_CUM"]   = merged[f"{col_prefix}_KG_CUM"].fillna(0)
 
-    # --- Compute standing fish safely
+    # ----------------------
+    # Standing fish
+    # ----------------------
+    for col in ["STOCKED","HARV_FISH_CUM","IN_FISH_CUM","OUT_FISH_CUM"]:
+        base[col] = pd.to_numeric(base[col], errors="coerce").fillna(0)
+
     base["FISH_ALIVE"] = (base["STOCKED"] - base["HARV_FISH_CUM"] + base["IN_FISH_CUM"] - base["OUT_FISH_CUM"]).clip(lower=0)
     base["NUMBER OF FISH"] = base["FISH_ALIVE"].astype(int)
 
+    # ----------------------
+    # Sort final
+    # ----------------------
+    base = base.sort_values("DATE").reset_index(drop=True)
+
     return feeding_c2, harvest_c2, base
 
+#Compute summary
 def compute_summary(feeding_c2, sampling_c2):
     import pandas as pd
     import numpy as np
