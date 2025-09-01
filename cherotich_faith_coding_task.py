@@ -180,9 +180,10 @@ def compute_summary(feeding_c2, sampling_c2):
 # =====================
 # App UI
 # =====================
-st.title("Fish Cage Production Dashboard")
+st.title("Fish Cage Production Analysis Dashboard")
 
 # Upload files
+st.sidebar.header("Upload Excel Files (Cage 2 only)")
 feeding_file = st.sidebar.file_uploader("Upload Feeding File", type=["xls","xlsx"])
 harvest_file = st.sidebar.file_uploader("Upload Harvest File", type=["xls","xlsx"])
 sampling_file = st.sidebar.file_uploader("Upload Sampling File", type=["xls","xlsx"])
@@ -227,4 +228,4 @@ if feeding_file and harvest_file and sampling_file:
     st.dataframe(summary_c2[["DATE","NUMBER OF FISH","ABW_G","BIOMASS_KG","PERIOD_FEED","PERIOD_WEIGHT_GAIN","PERIOD_eFCR","AGGREGATED_eFCR"]].round(2))
 
 else:
-    st.warning("Please upload Feeding, Harvest, and Sampling files to continue.")
+    st.warning("Upload the Excel files to begin.")
