@@ -7,16 +7,24 @@ import plotly.express as px
 # -------------------------------
 # 1. Load data with caching
 # -------------------------------
-def load_data(feeding_file, harvest_file, sampling_file):
+@st.cache_data
+def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
     feeding = pd.read_excel(feeding_file)
     harvest = pd.read_excel(harvest_file)
     sampling = pd.read_excel(sampling_file)
-    return feeding, harvest, sampling
+    
+    transfers = None
+    if transfer_file:
+        transfers = pd.read_excel(transfer_file)
+        # Ensure weights in kg
+        transfers['TOTAL_WEIGHT_KG'] = transfers['NUMBER_OF_FISH'] * transfers['AVERAGE_BODY_WEIGHT (g)'] / 1000
+        transfers['DATE'] = pd.to_datetime(transfers['DATE'])
+    return feeding, harvest, sampling, transfers
 
 # -------------------------------
 # 2. Preprocess Cage 2
 # -------------------------------
-def preprocess_cage2(feeding, harvest, sampling):
+def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     cage_number = 2
 
     feeding_c2 = feeding[feeding['CAGE NUMBER'] == cage_number].copy()
@@ -40,6 +48,25 @@ def preprocess_cage2(feeding, harvest, sampling):
     end_date = pd.to_datetime("2025-07-09")
     sampling_c2 = sampling_c2[(sampling_c2['DATE'] >= start_date) & (sampling_c2['DATE'] <= end_date)]
     feeding_c2 = feeding_c2[(feeding_c2['DATE'] >= start_date) & (feeding_c2['DATE'] <= end_date)]
+
+    # Apply transfers if provided
+    if transfers is not None:
+        # Only consider transfers involving cage 2
+        cage_transfers = transfers[(transfers['CAGE_FROM'] == cage_number) | (transfers['CAGE_TO'] == cage_number)].copy()
+        cage_transfers.sort_values('DATE', inplace=True)
+        # Apply net effect
+        for idx, row in cage_transfers.iterrows():
+            date = row['DATE']
+            if row['CAGE_FROM'] == cage_number:
+                # Fish out
+                sampling_c2.loc[sampling_c2['DATE'] >= date, 'NUMBER OF FISH'] -= row['NUMBER_OF_FISH']
+                sampling_c2.loc[sampling_c2['DATE'] >= date, 'AVERAGE BODY WEIGHT (g)'] = sampling_c2.loc[sampling_c2['DATE'] >= date, 'AVERAGE BODY WEIGHT (g)']
+            if row['CAGE_TO'] == cage_number:
+                # Fish in
+                sampling_c2.loc[sampling_c2['DATE'] >= date, 'NUMBER OF FISH'] += row['NUMBER_OF_FISH']
+                # Assuming new fish have same ABW as transfer weight
+                # Could use weighted average for ABW if desired
+                # Here we keep original ABW
 
     return feeding_c2, harvest_c2, sampling_c2
 
@@ -103,7 +130,7 @@ def create_mock_cages(summary_c2, feeding_c2, sampling_c2):
             'NUMBER OF FISH': (summary_c2['NUMBER OF FISH'].values[:n_dates] + np.random.randint(-50,50,n_dates)).clip(min=1),
             'AVERAGE BODY WEIGHT (g)': (summary_c2['AVERAGE BODY WEIGHT (g)'].values[:n_dates] * np.random.normal(1,0.05,n_dates)).clip(min=0.1)
         })
-        mock_sampling['TOTAL_WEIGHT_KG'] = mock_sampling['NUMBER OF FISH'] * mock_sampling['AVERAGE BODY WEIGHT (g)'] / 1000
+        mock_sampling['TOTAL_WEIGHT_KG'] = mock_sampling['NUMBER OF_FISH'] * mock_sampling['AVERAGE BODY WEIGHT (g)'] / 1000
 
         # Merge cumulative feed
         summary = pd.merge_asof(mock_sampling.sort_values('DATE'), daily_feed[['DATE','CUM_FEED']], on='DATE', direction='backward')
@@ -128,11 +155,12 @@ st.sidebar.header("Upload Excel Files (Cage 2 only)")
 feeding_file = st.sidebar.file_uploader("Feeding Record", type=["xlsx"])
 harvest_file = st.sidebar.file_uploader("Fish Harvest", type=["xlsx"])
 sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
+transfer_file = st.sidebar.file_uploader("Fish Transfers (optional)", type=["xlsx"])
 
 if feeding_file and harvest_file and sampling_file:
-    feeding, harvest, sampling = load_data(feeding_file, harvest_file, sampling_file)
+    feeding, harvest, sampling, transfers = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
 
-    feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling)
+    feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling, transfers)
     summary_c2 = compute_summary(feeding_c2, sampling_c2)
 
     # Generate mock cages
@@ -156,7 +184,7 @@ if feeding_file and harvest_file and sampling_file:
         df = df.dropna(subset=['TOTAL_WEIGHT_KG'])
         fig = px.line(df, x='DATE', y='TOTAL_WEIGHT_KG', markers=True,
                       title=f'Cage {selected_cage}: Growth Over Time',
-                      labels={'TOTAL_WEIGHT_KG': 'Total Weight (Kg)'})
+                      labels={'TOTAL_WEIGHT_KG': 'Total Weight (Kg)'} )
         st.plotly_chart(fig)
     else:
         df['AGGREGATED_eFCR'] = pd.to_numeric(df['AGGREGATED_eFCR'], errors='coerce')
@@ -165,5 +193,4 @@ if feeding_file and harvest_file and sampling_file:
         fig = px.line(df, x='DATE', y='AGGREGATED_eFCR', markers=True)
         fig.add_scatter(x=df['DATE'], y=df['PERIOD_eFCR'], mode='lines+markers', name='Period eFCR')
         fig.update_layout(title=f'Cage {selected_cage}: eFCR Over Time', yaxis_title='eFCR')
-
         st.plotly_chart(fig)
