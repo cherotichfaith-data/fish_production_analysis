@@ -3,165 +3,129 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+from sklearn.preprocessing import StandardScaler
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 # -------------------------------
-# 1. Load data
+# Data Cleaning and Preparation
 # -------------------------------
-def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
-    feeding = pd.read_excel(feeding_file)
-    harvest = pd.read_excel(harvest_file)
-    sampling = pd.read_excel(sampling_file)
-    if transfer_file:
-        transfers = pd.read_excel(transfer_file)
-        # Convert any weight in grams to kg
-        if 'WEIGHT (g)' in transfers.columns:
-            transfers['WEIGHT (Kg)'] = transfers['WEIGHT (g)'] / 1000
-        elif 'WEIGHT (Kg)' not in transfers.columns:
-            st.warning("Transfer file has no weight column")
-        return feeding, harvest, sampling, transfers
-    return feeding, harvest, sampling
+def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df=None, scale_numeric=False, show_eda=False):
+    for df in [feeding_df, harvest_df, sampling_df] + ([transfer_df] if transfer_df is not None else []):
+        df.dropna(axis=1, how='all', inplace=True)
+
+    def standardize_columns(df):
+        df.columns = (
+            df.columns
+            .str.strip()
+            .str.lower()
+            .str.replace(' ', '_')
+            .str.replace(r'[^0-9a-zA-Z_]', '', regex=True)
+        )
+        return df
+
+    feeding_df = standardize_columns(feeding_df)
+    harvest_df = standardize_columns(harvest_df)
+    sampling_df = standardize_columns(sampling_df)
+    if transfer_df is not None:
+        transfer_df = standardize_columns(transfer_df)
+
+    # Fill missing numeric/text values
+    if 'feed_amount_kg' in feeding_df.columns:
+        feeding_df['feed_amount_kg'].fillna(0, inplace=True)
+    for col in ['number_of_fish','average_body_weight_g']:
+        if col in sampling_df.columns:
+            sampling_df[col].fillna(0, inplace=True)
+    if transfer_df is not None:
+        for col in ['total_weight_kg','abw_g']:
+            if col in transfer_df.columns:
+                transfer_df[col].fillna(0, inplace=True)
+
+    # Convert numeric columns
+    for df, numeric_cols in zip([feeding_df, sampling_df, transfer_df] if transfer_df is not None else [feeding_df, sampling_df],
+                                [['feed_amount_kg'], ['number_of_fish','average_body_weight_g'], ['total_weight_kg','abw_g'] if transfer_df is not None else []]):
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # Convert dates
+    for df in [feeding_df, harvest_df, sampling_df] + ([transfer_df] if transfer_df is not None else []):
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+
+    # Remove duplicates
+    for df in [feeding_df, harvest_df, sampling_df] + ([transfer_df] if transfer_df is not None else []):
+        df.drop_duplicates(inplace=True)
+
+    report = {
+        'feeding_rows': len(feeding_df),
+        'harvest_rows': len(harvest_df),
+        'sampling_rows': len(sampling_df),
+        'transfer_rows': len(transfer_df) if transfer_df is not None else 0
+    }
+
+    return feeding_df, harvest_df, sampling_df, transfer_df, report
 
 # -------------------------------
-# 2. Preprocess Cage 2
+# Preprocess Cage 2
 # -------------------------------
 def preprocess_cage2(feeding, harvest, sampling):
     cage_number = 2
 
-    # Filter Cage 2
-    feeding_c2 = feeding[feeding['CAGE NUMBER'] == cage_number].copy()
-    harvest_c2 = harvest[harvest['CAGE'] == cage_number].copy()
-    sampling_c2 = sampling[sampling['CAGE NUMBER'] == cage_number].copy()
-
-    # Ensure numeric columns
-    numeric_cols_feed = ['FEED AMOUNT (Kg)']
-    numeric_cols_samp = ['NUMBER OF FISH','AVERAGE BODY WEIGHT (g)']
-    for col in numeric_cols_feed:
-        feeding_c2[col] = pd.to_numeric(feeding_c2[col], errors='coerce')
-    for col in numeric_cols_samp:
-        sampling_c2[col] = pd.to_numeric(sampling_c2[col], errors='coerce')
-
-    # Handle missing values
-    feeding_c2 = feeding_c2.dropna(subset=['DATE','FEED AMOUNT (Kg)'])
-    sampling_c2 = sampling_c2.dropna(subset=['DATE','NUMBER OF FISH','AVERAGE BODY WEIGHT (g)'])
-
-    # Convert DATE to datetime
-    feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'], errors='coerce')
-    sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'], errors='coerce')
-
-    # Remove duplicates
-    feeding_c2 = feeding_c2.drop_duplicates(subset=['DATE'])
-    sampling_c2 = sampling_c2.drop_duplicates(subset=['DATE'])
+    feeding_c2 = feeding[feeding['cage_number'] == cage_number].copy()
+    harvest_c2 = harvest[harvest['cage'] == cage_number].copy()
+    sampling_c2 = sampling[sampling['cage_number'] == cage_number].copy()
 
     # Add manual stocking
     stocking_date = pd.to_datetime("2024-08-26")
     stocked_fish = 7290
     initial_abw = 11.9
     stocking_row = pd.DataFrame([{
-        'DATE': stocking_date,
-        'CAGE NUMBER': cage_number,
-        'NUMBER OF FISH': stocked_fish,
-        'AVERAGE BODY WEIGHT (g)': initial_abw
+        'date': stocking_date,
+        'cage_number': cage_number,
+        'number_of_fish': stocked_fish,
+        'average_body_weight_g': initial_abw
     }])
-    sampling_c2 = pd.concat([stocking_row, sampling_c2]).sort_values('DATE')
+    sampling_c2 = pd.concat([stocking_row, sampling_c2]).sort_values('date')
 
     # Limit timeframe
     start_date = pd.to_datetime("2024-08-26")
     end_date = pd.to_datetime("2025-07-09")
-    sampling_c2 = sampling_c2[(sampling_c2['DATE'] >= start_date) & (sampling_c2['DATE'] <= end_date)]
-    feeding_c2 = feeding_c2[(feeding_c2['DATE'] >= start_date) & (feeding_c2['DATE'] <= end_date)]
+    sampling_c2 = sampling_c2[(sampling_c2['date'] >= start_date) & (sampling_c2['date'] <= end_date)]
+    feeding_c2 = feeding_c2[(feeding_c2['date'] >= start_date) & (feeding_c2['date'] <= end_date)]
 
     return feeding_c2, harvest_c2, sampling_c2
 
 # -------------------------------
-# 3. Compute production summary
+# Compute summary
 # -------------------------------
 def compute_summary(feeding_c2, sampling_c2):
-    # Ensure dates
-    feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'])
-    sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'])
+    feeding_c2['date'] = pd.to_datetime(feeding_c2['date'])
+    sampling_c2['date'] = pd.to_datetime(sampling_c2['date'])
 
-    # Cumulative feed
-    feeding_c2 = feeding_c2.sort_values('DATE')
-    feeding_c2['CUM_FEED'] = feeding_c2['FEED AMOUNT (Kg)'].cumsum()
+    feeding_c2 = feeding_c2.sort_values('date')
+    feeding_c2['cum_feed'] = feeding_c2['feed_amount_kg'].cumsum()
 
-    # Total weight in kg
-    sampling_c2 = sampling_c2.sort_values('DATE')
-    sampling_c2['TOTAL_WEIGHT_KG'] = sampling_c2['NUMBER OF FISH'] * sampling_c2['AVERAGE BODY WEIGHT (g)'] / 1000
+    sampling_c2 = sampling_c2.sort_values('date')
+    sampling_c2['total_weight_kg'] = sampling_c2['number_of_fish'] * sampling_c2['average_body_weight_g'] / 1000
 
-    # Merge cumulative feed with sampling
     summary = pd.merge_asof(
         sampling_c2,
-        feeding_c2[['DATE','CUM_FEED']],
-        on='DATE'
+        feeding_c2[['date','cum_feed']],
+        on='date'
     )
-    summary['CUM_FEED'] = summary['CUM_FEED'].fillna(method='ffill').fillna(0)
-
-    # eFCR calculations
-    summary['AGGREGATED_eFCR'] = summary['CUM_FEED'] / summary['TOTAL_WEIGHT_KG']
-    summary['PERIOD_WEIGHT_GAIN'] = summary['TOTAL_WEIGHT_KG'].diff().fillna(summary['TOTAL_WEIGHT_KG'])
-    summary['PERIOD_FEED'] = summary['CUM_FEED'].diff().fillna(summary['CUM_FEED'])
-    summary['PERIOD_eFCR'] = summary['PERIOD_FEED'] / summary['PERIOD_WEIGHT_GAIN']
-
-    # Remove infinite or NaN
+    summary['cum_feed'] = summary['cum_feed'].fillna(method='ffill').fillna(0)
+    summary['aggregated_efcr'] = summary['cum_feed'] / summary['total_weight_kg']
+    summary['period_weight_gain'] = summary['total_weight_kg'].diff().fillna(summary['total_weight_kg'])
+    summary['period_feed'] = summary['cum_feed'].diff().fillna(summary['cum_feed'])
+    summary['period_efcr'] = summary['period_feed'] / summary['period_weight_gain']
     summary.replace([np.inf, -np.inf], np.nan, inplace=True)
-    summary = summary.fillna(0)
+    summary.fillna(0, inplace=True)
 
     return summary
 
 # -------------------------------
-# 4. Create mock cages (3-7)
-# -------------------------------
-def create_mock_cages(summary_c2, feeding_c2, sampling_c2):
-    mock_summaries = {}
-    cage_ids = range(3, 8)
-    sampling_dates = sampling_c2['DATE'].tolist()
-
-    # Date range
-    if not feeding_c2.empty:
-        start_date = feeding_c2['DATE'].min()
-        end_date = feeding_c2['DATE'].max()
-    else:
-        start_date = sampling_c2['DATE'].min()
-        end_date = sampling_c2['DATE'].max()
-    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-
-    for cage_id in cage_ids:
-        daily_feed = pd.DataFrame({
-            'DATE': date_range,
-            'CAGE NUMBER': cage_id,
-            'FEED AMOUNT (Kg)': np.random.normal(10, 1, size=len(date_range))
-        })
-        daily_feed['CUM_FEED'] = daily_feed['FEED AMOUNT (Kg)'].cumsum()
-
-        mock_sampling = pd.DataFrame({
-            'DATE': sampling_dates,
-            'CAGE NUMBER': cage_id,
-            'NUMBER OF FISH': summary_c2['NUMBER OF FISH'].values + np.random.randint(-50,50,len(sampling_dates)),
-            'AVERAGE BODY WEIGHT (g)': summary_c2['AVERAGE BODY WEIGHT (g)'].values * np.random.normal(1,0.05,len(sampling_dates))
-        })
-        mock_sampling['TOTAL_WEIGHT_KG'] = mock_sampling['NUMBER OF FISH']*mock_sampling['AVERAGE BODY WEIGHT (g)']/1000
-
-        summary = pd.merge_asof(
-            mock_sampling.sort_values('DATE'),
-            daily_feed[['DATE','CUM_FEED']].sort_values('DATE'),
-            on='DATE'
-        )
-        summary['CUM_FEED'] = summary['CUM_FEED'].fillna(method='ffill').fillna(0)
-
-        summary['AGGREGATED_eFCR'] = summary['CUM_FEED']/summary['TOTAL_WEIGHT_KG']
-        summary['PERIOD_WEIGHT_GAIN'] = summary['TOTAL_WEIGHT_KG'].diff().fillna(summary['TOTAL_WEIGHT_KG'])
-        summary['PERIOD_FEED'] = summary['CUM_FEED'].diff().fillna(summary['CUM_FEED'])
-        summary['PERIOD_eFCR'] = summary['PERIOD_FEED']/summary['PERIOD_WEIGHT_GAIN']
-
-        summary.replace([np.inf, -np.inf], np.nan, inplace=True)
-        summary = summary.fillna(0)
-
-        mock_summaries[cage_id] = summary
-
-    return mock_summaries
-
-# -------------------------------
-# 5. Streamlit interface
+# Streamlit App
 # -------------------------------
 st.title("Fish Cage Production Analysis")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
@@ -172,40 +136,17 @@ sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
 transfer_file = st.sidebar.file_uploader("Fish Transfers (Optional)", type=["xlsx"])
 
 if feeding_file and harvest_file and sampling_file:
-    data = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
-    if transfer_file:
-        feeding, harvest, sampling, transfers = data
-    else:
-        feeding, harvest, sampling = data
+    feeding_df = pd.read_excel(feeding_file)
+    harvest_df = pd.read_excel(harvest_file)
+    sampling_df = pd.read_excel(sampling_file)
+    transfer_df = pd.read_excel(transfer_file) if transfer_file else None
 
-    feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling)
+    feeding_clean, harvest_clean, sampling_clean, transfer_clean, report = clean_and_prepare(
+        feeding_df, harvest_df, sampling_df, transfer_df, scale_numeric=False, show_eda=False
+    )
+
+    feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding_clean, harvest_clean, sampling_clean)
     summary_c2 = compute_summary(feeding_c2, sampling_c2)
 
-    mock_cages = create_mock_cages(summary_c2, feeding_c2, sampling_c2)
-    all_cages = {2: summary_c2, **mock_cages}
-
-    st.sidebar.header("Select Options")
-    selected_cage = st.sidebar.selectbox("Select Cage", list(all_cages.keys()))
-    selected_kpi = st.sidebar.selectbox("Select KPI", ["Growth", "eFCR"])
-
-    df = all_cages[selected_cage]
-
-    st.subheader(f"Cage {selected_cage} Production Summary")
-    st.dataframe(df[['DATE','NUMBER OF FISH','TOTAL_WEIGHT_KG','AGGREGATED_eFCR','PERIOD_eFCR']])
-
-    # Plot graphs
-    if selected_kpi == "Growth":
-        df['TOTAL_WEIGHT_KG'] = pd.to_numeric(df['TOTAL_WEIGHT_KG'], errors='coerce')
-        df = df.dropna(subset=['TOTAL_WEIGHT_KG'])
-        fig = px.line(df, x='DATE', y='TOTAL_WEIGHT_KG', markers=True,
-                      title=f'Cage {selected_cage}: Growth Over Time',
-                      labels={'TOTAL_WEIGHT_KG': 'Total Weight (Kg)'})
-        st.plotly_chart(fig)
-    else:
-        df['AGGREGATED_eFCR'] = pd.to_numeric(df['AGGREGATED_eFCR'], errors='coerce')
-        df['PERIOD_eFCR'] = pd.to_numeric(df['PERIOD_eFCR'], errors='coerce')
-        df = df.dropna(subset=['AGGREGATED_eFCR','PERIOD_eFCR'])
-        fig = px.line(df, x='DATE', y='AGGREGATED_eFCR', markers=True)
-        fig.add_scatter(x=df['DATE'], y=df['PERIOD_eFCR'], mode='lines+markers', name='Period eFCR')
-        fig.update_layout(title=f'Cage {selected_cage}: eFCR Over Time', yaxis_title='eFCR')
-        st.plotly_chart(fig)
+    st.subheader("Cage 2 Production Summary")
+    st.dataframe(summary_c2[['date','number_of_fish','total_weight_kg','aggregated_efcr','period_efcr']])
