@@ -361,25 +361,34 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
     mock_harvest = []
     mock_summaries = {}
 
+    # Identify ABW column
+    abw_col = None
+    for col in ['average_body_weight_g', 'ABW_G', 'ABW']:
+        if col in sampling_c2.columns:
+            abw_col = col
+            break
+
+    if abw_col is None:
+        raise KeyError("No column for average body weight found in sampling data!")
+
     for cage in range(3, 3 + num_cages):  # Cage numbers 3,4,5,6,7
-        # Feeding
+        # ----- Feeding -----
         f = feeding_c2.copy()
         f['cage_number'] = cage
         if 'feed_amount_kg' in f.columns:
             f['feed_amount_kg'] = f['feed_amount_kg'] * np.random.uniform(0.9, 1.1, size=len(f))
         mock_feeding.append(f)
 
-        # Sampling
+        # ----- Sampling -----
         s = sampling_c2.copy()
         s['cage_number'] = cage
-        if 'average_body_weight_g' in s.columns:
-            s['average_body_weight_g'] = s['average_body_weight_g'] * np.random.uniform(0.95, 1.05, size=len(s))
+        s[abw_col] = s[abw_col] * np.random.uniform(0.95, 1.05, size=len(s))
         if 'FISH_ALIVE' in s.columns:
             s['FISH_ALIVE'] = pd.to_numeric(s['FISH_ALIVE'], errors='coerce').fillna(0)
-        s['BIOMASS_KG'] = s['FISH_ALIVE'] * s['average_body_weight_g'] / 1000
+        s['BIOMASS_KG'] = s['FISH_ALIVE'] * s[abw_col] / 1000
         mock_sampling.append(s)
 
-        # Harvest
+        # ----- Harvest -----
         h = harvest_c2.copy()
         h['cage'] = cage
         if 'total_weight_kg' in h.columns:
@@ -388,7 +397,7 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
             h['number_of_fish'] = pd.to_numeric(h['number_of_fish'], errors='coerce').fillna(0)
         mock_harvest.append(h)
 
-        # Production summary – make sure cage2_production_summary is defined
+        # ----- Production summary -----
         summary = cage2_production_summary(f, s, h)
         mock_summaries[cage] = summary
 
