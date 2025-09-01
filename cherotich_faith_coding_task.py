@@ -56,7 +56,7 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
                 break
 
     # Parse dates
-    for df in [feeding, harvest, sampling] + ([transfers] if transfers else []):
+    for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
         if df is not None and "DATE" in df.columns:
             df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
 
