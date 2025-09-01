@@ -69,22 +69,33 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     start_date = pd.to_datetime("2024-08-26")
     end_date   = pd.to_datetime("2025-07-09")
 
-    # Filter datasets
-    def _clip(df):
-        if df is None or df.empty: return pd.DataFrame()
+    # Helper to find cage column dynamically
+    def get_cage_col(df):
+        for col in df.columns:
+            if "CAGE" in col:
+                return col
+        raise KeyError("No cage column found in dataframe.")
+
+    feeding_cage_col  = get_cage_col(feeding)
+    harvest_cage_col  = get_cage_col(harvest)
+    sampling_cage_col = get_cage_col(sampling)
+
+    # Filter datasets safely
+    def _clip(df, cage_col):
         df = df.dropna(subset=["DATE"]).sort_values("DATE")
-        return df[(df["DATE"] >= start_date) & (df["DATE"] <= end_date)]
+        df = df[(df[cage_col]==cage_number) & (df["DATE"] >= start_date) & (df["DATE"] <= end_date)]
+        return df
 
-    feeding_c2  = _clip(feeding[feeding["CAGE_NUMBER"]==cage_number])
-    harvest_c2  = _clip(harvest[harvest["CAGE_NUMBER"]==cage_number])
-    sampling_c2 = _clip(sampling[sampling["CAGE_NUMBER"]==cage_number])
+    feeding_c2  = _clip(feeding, feeding_cage_col)
+    harvest_c2  = _clip(harvest, harvest_cage_col)
+    sampling_c2 = _clip(sampling, sampling_cage_col)
 
-    # Stocking row
+    # Stocking row (same as before)
     stocked_fish = 7290
     initial_abw = 11.9
     stocking_row = pd.DataFrame([{
         "DATE": start_date,
-        "CAGE_NUMBER": cage_number,
+        sampling_cage_col: cage_number,
         "NUMBER_OF_FISH": stocked_fish,
         "AVERAGE_BODY_WEIGHT_G": initial_abw
     }])
