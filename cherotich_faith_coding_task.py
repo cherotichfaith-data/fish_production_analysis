@@ -91,27 +91,17 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     harvest_c2  = _clip(harvest[harvest.get("CAGE NUMBER", harvest.get("CAGE", None)) == cage_number])
     sampling_c2 = _clip(sampling[sampling.get("CAGE NUMBER", sampling.columns[0]) == cage_number])
 
-    # --- Stocking info
+    # --- Manual Stocking
     stocked_fish = 7290
     initial_abw_g = 11.9
-    if transfers is not None and not transfers.empty:
-        t = _clip(transfers)
-        t["DEST_INT"] = to_int_cage(t["DESTINATION CAGE"]) if "DESTINATION CAGE" in t.columns else np.nan
-        inbound = t[t["DEST_INT"]==cage_number].sort_values("DATE")
-        if not inbound.empty:
-            first = inbound.iloc[0]
-            if "NUMBER OF FISH" in inbound.columns and pd.notna(first.get("NUMBER OF FISH")):
-                stocked_fish = int(first["NUMBER OF FISH"])
-            if "TOTAL WEIGHT [KG]" in inbound.columns and pd.notna(first.get("TOTAL WEIGHT [KG]")):
-                initial_abw_g = float(first["TOTAL WEIGHT [KG]"])*1000/stocked_fish
-
-    # --- Base timeline
     stocking_row = pd.DataFrame([{
         "DATE": start_date,
         "CAGE NUMBER": cage_number,
         "AVERAGE BODY WEIGHT(G)": initial_abw_g,
         "STOCKED": stocked_fish
     }])
+
+    # Combine stocking with sampling
     base = pd.concat([stocking_row, sampling_c2], ignore_index=True).sort_values("DATE").reset_index(drop=True)
     base["STOCKED"] = stocked_fish
 
@@ -149,7 +139,8 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
         t = _clip(transfers)
         t["ORIGIN_INT"] = to_int_cage(t.get("ORIGIN CAGE", np.nan))
         t["DEST_INT"] = to_int_cage(t.get("DESTINATION CAGE", np.nan))
-        # Out
+        
+        # Out transfers
         tout = t[t["ORIGIN_INT"]==cage_number].sort_values("DATE").copy()
         if not tout.empty:
             tout["OUT_FISH_CUM"] = pd.to_numeric(tout.get("NUMBER OF FISH",0), errors="coerce").cumsum()
@@ -157,7 +148,8 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
             mo = pd.merge_asof(base[["DATE"]], tout[["DATE","OUT_FISH_CUM","OUT_KG_CUM"]], on="DATE", direction="backward")
             base["OUT_FISH_CUM"] = mo["OUT_FISH_CUM"].fillna(0)
             base["OUT_KG_CUM"] = mo["OUT_KG_CUM"].fillna(0)
-        # In
+
+        # In transfers
         tin = t[t["DEST_INT"]==cage_number].sort_values("DATE").copy()
         if not tin.empty:
             tin["IN_FISH_CUM"] = pd.to_numeric(tin.get("NUMBER OF FISH",0), errors="coerce").cumsum()
@@ -178,11 +170,11 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
 def compute_summary(feeding_c2, base, harvest_c2=None, transfers=None):
     df = base.copy()
 
-    # Feed
+    # --- Feed
     feed_col = find_col(feeding_c2, ["FEED AMOUNT (KG)","FEED_KG"])
     if feed_col and feed_col in feeding_c2.columns:
-        feeding_c2["FEED_AMOUNT_KG"] = pd.to_numeric(feeding_c2[feed_col], errors="coerce").fillna(0)
         feeding_c2 = feeding_c2.sort_values("DATE").copy()
+        feeding_c2["FEED_AMOUNT_KG"] = pd.to_numeric(feeding_c2[feed_col], errors="coerce").fillna(0)
         feeding_c2["FEED_CUM"] = feeding_c2["FEED_AMOUNT_KG"].cumsum()
         df = pd.merge_asof(df.sort_values("DATE"),
                            feeding_c2[["DATE","FEED_CUM"]],
@@ -190,11 +182,11 @@ def compute_summary(feeding_c2, base, harvest_c2=None, transfers=None):
         df["FEED_PERIOD_KG"] = df["FEED_CUM"].diff().fillna(df["FEED_CUM"])
         df["FEED_AGG_KG"] = df["FEED_CUM"]
 
-    # Harvest
+    # --- Harvest
     if harvest_c2 is not None and not harvest_c2.empty:
+        harvest_c2 = harvest_c2.sort_values("DATE").copy()
         h_fish_col = find_col(harvest_c2, ["NUMBER OF FISH"], "FISH")
         h_kg_col = find_col(harvest_c2, ["TOTAL WEIGHT [KG]","TOTAL WEIGHT (KG)"], "WEIGHT")
-        harvest_c2 = harvest_c2.sort_values("DATE").copy()
         harvest_c2["HARVEST_FISH"] = pd.to_numeric(harvest_c2.get(h_fish_col,0), errors="coerce").fillna(0)
         harvest_c2["HARVEST_KG"] = pd.to_numeric(harvest_c2.get(h_kg_col,0), errors="coerce").fillna(0)
         harvest_c2["HARV_CUM_FISH"] = harvest_c2["HARVEST_FISH"].cumsum()
@@ -204,7 +196,7 @@ def compute_summary(feeding_c2, base, harvest_c2=None, transfers=None):
                            on="DATE", direction="backward")
         df[["HARVEST_FISH","HARVEST_KG"]] = df[["HARVEST_FISH","HARVEST_KG"]].fillna(0)
 
-    # Transfers
+    # --- Transfers
     if transfers is not None and not transfers.empty:
         transfers = transfers.sort_values("DATE").copy()
         # Out
@@ -222,16 +214,19 @@ def compute_summary(feeding_c2, base, harvest_c2=None, transfers=None):
             df = pd.merge_asof(df.sort_values("DATE"), tin[["DATE","TRANSFER_IN_FISH","TRANSFER_IN_KG"]], on="DATE", direction="backward")
             df[["TRANSFER_IN_FISH","TRANSFER_IN_KG"]] = df[["TRANSFER_IN_FISH","TRANSFER_IN_KG"]].fillna(0)
 
-    # Biomass & Growth
+    # --- Biomass & Growth (adjusted for transfers and harvest)
     df["ABW_G"] = pd.to_numeric(df["AVERAGE BODY WEIGHT(G)"], errors="coerce")
-    df["BIOMASS_KG"] = df["ABW_G"]*df["NUMBER OF FISH"]/1000
-    df["GROWTH_KG"] = df["BIOMASS_KG"].diff().fillna(0)
+    df["BIOMASS_KG"] = df["ABW_G"] * df["FISH_ALIVE"] / 1000
 
-    # eFCR
-    df["PERIOD_eFCR"] = (df["FEED_PERIOD_KG"]/df["GROWTH_KG"].replace(0,np.nan)).fillna(0)
-    df["AGGREGATED_eFCR"] = (df["FEED_AGG_KG"]/df["BIOMASS_KG"].diff().cumsum().replace(0,np.nan)).fillna(0)
+    # Growth = net biomass change from previous row (including harvest & transfers)
+    df["GROWTH_KG"] = df["BIOMASS_KG"].diff().fillna(df["BIOMASS_KG"].iloc[0])
+
+    # --- eFCR
+    df["PERIOD_eFCR"] = (df["FEED_PERIOD_KG"] / df["GROWTH_KG"].replace(0,np.nan)).fillna(0)
+    df["AGGREGATED_eFCR"] = (df["FEED_AGG_KG"] / df["BIOMASS_KG"].diff().cumsum().replace(0,np.nan)).fillna(0)
 
     return df
+
 
 # =====================
 # Streamlit UI
