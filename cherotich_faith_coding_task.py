@@ -91,7 +91,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     harvest_c2  = _clip(harvest[harvest.get("CAGE NUMBER", harvest.get("CAGE", None)) == cage_number])
     sampling_c2 = _clip(sampling[sampling.get("CAGE NUMBER", sampling.columns[0]) == cage_number])
 
-    # Stocking info
+    # --- Stocking info
     stocked_fish = 7290
     initial_abw_g = 11.9
     if transfers is not None and not transfers.empty:
@@ -105,21 +105,33 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
             if "TOTAL WEIGHT [KG]" in inbound.columns and pd.notna(first.get("TOTAL WEIGHT [KG]")):
                 initial_abw_g = float(first["TOTAL WEIGHT [KG]"])*1000/stocked_fish
 
+    # --- Base timeline
     stocking_row = pd.DataFrame([{
         "DATE": start_date,
         "CAGE NUMBER": cage_number,
         "AVERAGE BODY WEIGHT(G)": initial_abw_g,
         "STOCKED": stocked_fish
     }])
-
     base = pd.concat([stocking_row, sampling_c2], ignore_index=True).sort_values("DATE").reset_index(drop=True)
     base["STOCKED"] = stocked_fish
 
-    # Initialize cumulative columns
+    # --- Ensure final harvest date exists
+    final_h_date = harvest_c2["DATE"].max() if harvest_c2 is not None and not harvest_c2.empty else end_date
+    if final_h_date not in base["DATE"].values:
+        last_abw = base["AVERAGE BODY WEIGHT(G)"].iloc[-1] if not base.empty else initial_abw_g
+        final_row = pd.DataFrame([{
+            "DATE": final_h_date,
+            "CAGE NUMBER": cage_number,
+            "AVERAGE BODY WEIGHT(G)": last_abw,
+            "STOCKED": stocked_fish
+        }])
+        base = pd.concat([base, final_row], ignore_index=True).sort_values("DATE").reset_index(drop=True)
+
+    # --- Initialize cumulative columns
     for col in ["HARV_FISH_CUM","HARV_KG_CUM","IN_FISH_CUM","IN_KG_CUM","OUT_FISH_CUM","OUT_KG_CUM"]:
         base[col] = 0.0
 
-    # Cumulative harvest
+    # --- Cumulative harvest
     if not harvest_c2.empty:
         h_fish_col = find_col(harvest_c2, ["NUMBER OF FISH"], "FISH")
         h_kg_col = find_col(harvest_c2, ["TOTAL WEIGHT [KG]","TOTAL WEIGHT (KG)"], "WEIGHT")
@@ -132,7 +144,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
         base["HARV_FISH_CUM"] = mh["HARV_FISH_CUM"].fillna(0)
         base["HARV_KG_CUM"] = mh["HARV_KG_CUM"].fillna(0)
 
-    # Cumulative transfers
+    # --- Cumulative transfers
     if transfers is not None and not transfers.empty:
         t = _clip(transfers)
         t["ORIGIN_INT"] = to_int_cage(t.get("ORIGIN CAGE", np.nan))
@@ -154,6 +166,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
             base["IN_FISH_CUM"] = mi["IN_FISH_CUM"].fillna(0)
             base["IN_KG_CUM"] = mi["IN_KG_CUM"].fillna(0)
 
+    # --- Standing fish
     base["FISH_ALIVE"] = (base["STOCKED"] - base["HARV_FISH_CUM"] + base["IN_FISH_CUM"] - base["OUT_FISH_CUM"]).clip(lower=0)
     base["NUMBER OF FISH"] = base["FISH_ALIVE"].astype(int)
 
