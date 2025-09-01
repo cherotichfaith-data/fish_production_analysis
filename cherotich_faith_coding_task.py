@@ -184,10 +184,10 @@ st.title("Fish Cage Production Analysis Dashboard")
 
 # Upload files
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
-feeding_file = st.sidebar.file_uploader("Upload Feeding File", type=["xls","xlsx"])
-harvest_file = st.sidebar.file_uploader("Upload Harvest File", type=["xls","xlsx"])
-sampling_file = st.sidebar.file_uploader("Upload Sampling File", type=["xls","xlsx"])
-transfer_file = st.sidebar.file_uploader("Upload Transfers File (Optional)", type=["xls","xlsx"])
+feeding_file = st.sidebar.file_uploader("Feeding Records", type=["xls","xlsx"])
+harvest_file = st.sidebar.file_uploader("Fish Harvest", type=["xls","xlsx"])
+sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xls","xlsx"])
+transfer_file = st.sidebar.file_uploader("Fish Transfers", type=["xls","xlsx"])
 
 if feeding_file and harvest_file and sampling_file:
     feeding_c2, harvest_c2, sampling_c2, transfers_c2 = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
