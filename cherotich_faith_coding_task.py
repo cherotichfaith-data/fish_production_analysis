@@ -141,7 +141,9 @@ def create_mock_cage_data(summary_c2):
         mock_summaries[cage_id] = mock
     return mock_summaries
 
+# ===========================
 # 5. Streamlit Interface
+# ===========================
 st.title("Fish Cage Production Analysis")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
@@ -150,8 +152,10 @@ harvest_file = st.sidebar.file_uploader("Fish Harvest", type=["xlsx"])
 sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
 
 if feeding_file and harvest_file and sampling_file:
+    # Load data
     feeding, harvest, sampling = load_data(feeding_file, harvest_file, sampling_file)
 
+    # Preprocess Cage 2
     feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling)
     summary_c2 = compute_summary(feeding_c2, sampling_c2)
 
@@ -161,25 +165,46 @@ if feeding_file and harvest_file and sampling_file:
 
     # Sidebar selectors
     st.sidebar.header("Select Options")
-    selected_cage = st.sidebar.selectbox("Select Cage", list(all_cages.keys()))
+    selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_cages.keys()))
     selected_kpi = st.sidebar.selectbox("Select KPI", ["Growth", "eFCR"])
 
-    df = all_cages[selected_cage]
+    df = all_cages[selected_cage].copy()
+    df = df.sort_values('DATE').reset_index(drop=True)
 
     # Display production summary table
     st.subheader(f"Cage {selected_cage} Production Summary")
-    st.dataframe(df[['DATE','NUMBER OF FISH','TOTAL_WEIGHT_KG','AGGREGATED_eFCR','PERIOD_eFCR']].round(2))
+    st.dataframe(df[['DATE', 'NUMBER OF FISH', 'TOTAL_WEIGHT_KG', 'AGGREGATED_eFCR', 'PERIOD_eFCR']].round(2))
 
-    # Plot graphs
+    # Plot KPI graphs
     if selected_kpi == "Growth":
         df_plot = df.dropna(subset=['TOTAL_WEIGHT_KG'])
-        fig = px.line(df_plot, x='DATE', y='TOTAL_WEIGHT_KG', markers=True,
-                      title=f'Cage {selected_cage}: Growth Over Time',
-                      labels={'TOTAL_WEIGHT_KG': 'Total Weight (Kg)'})
+        fig = px.line(
+            df_plot,
+            x='DATE',
+            y='TOTAL_WEIGHT_KG',
+            markers=True,
+            title=f'Cage {selected_cage}: Growth Over Time',
+            labels={'TOTAL_WEIGHT_KG': 'Total Weight (Kg)'}
+        )
         st.plotly_chart(fig)
-    else:
-        df_plot = df.dropna(subset=['AGGREGATED_eFCR','PERIOD_eFCR'])
-        fig = px.line(df_plot, x='DATE', y='AGGREGATED_eFCR', markers=True, name='Aggregated eFCR')
-        fig.add_scatter(x=df_plot['DATE'], y=df_plot['PERIOD_eFCR'], mode='lines+markers', name='Period eFCR')
-        fig.update_layout(title=f'Cage {selected_cage}: eFCR Over Time', yaxis_title='eFCR')
+    else:  # eFCR
+        df_plot = df.dropna(subset=['AGGREGATED_eFCR', 'PERIOD_eFCR'])
+        fig = px.line(
+            df_plot,
+            x='DATE',
+            y='AGGREGATED_eFCR',
+            markers=True,
+            title=f'Cage {selected_cage}: eFCR Over Time',
+            labels={'AGGREGATED_eFCR': 'Aggregated eFCR'}
+        )
+        fig.add_scatter(
+            x=df_plot['DATE'],
+            y=df_plot['PERIOD_eFCR'],
+            mode='lines+markers',
+            name='Period eFCR'
+        )
+        fig.update_layout(yaxis_title='eFCR')
         st.plotly_chart(fig)
+else:
+    st.info("Please upload the Excel files to view the production summary.")
+
