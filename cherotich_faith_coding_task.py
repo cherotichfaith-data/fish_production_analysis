@@ -351,7 +351,7 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
     return mock_feeding, mock_sampling, mock_harvest, mock_summaries
 
 # ===========================
-# Streamlit UI – Cage Selection + KPI (Styled)
+# Streamlit UI – Cage Selection + KPI (Styled + Dynamic)
 # ===========================
 import streamlit as st
 import pandas as pd
@@ -364,7 +364,9 @@ st.set_page_config(
     page_icon="🐟"
 )
 
-# Custom CSS for styling
+# -------------------
+# Custom CSS
+# -------------------
 st.markdown("""
     <style>
     /* Main title */
@@ -376,19 +378,29 @@ st.markdown("""
         margin-bottom: 20px;
     }
 
-    /* Sidebar headers */
+    /* Sidebar with gradient */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1E90FF, #87CEFA);
+        color: white;
+        padding: 20px;
+    }
+    [data-testid="stSidebar"] .css-1d391kg {color: white;}
+
+    /* Sidebar header text */
     .sidebar .stHeader {
-        color: #1E90FF;
+        color: white;
         font-weight: bold;
     }
 
-    /* KPI summary cards */
+    /* KPI card styling */
     .kpi-card {
-        background-color: #f0f8ff;
         padding: 15px;
-        border-radius: 10px;
+        border-radius: 12px;
         text-align: center;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        color: white;
+        font-weight: bold;
+        font-size: 1.2rem;
+        box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
         margin-bottom: 10px;
     }
 
@@ -397,17 +409,20 @@ st.markdown("""
         background-color: #1E90FF;
         color: white;
     }
-
     .dataframe td {
         font-size: 14px;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# Main title
+# -------------------
+# Main Title
+# -------------------
 st.markdown('<div class="main-title">Fish Cage Production Analysis Dashboard</div>', unsafe_allow_html=True)
 
-# Sidebar upload & selections
+# -------------------
+# Sidebar: File Uploads & Selections
+# -------------------
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
 feeding_file  = st.sidebar.file_uploader("Feeding Record", type=["xlsx"])
@@ -433,17 +448,38 @@ if feeding_file and harvest_file and sampling_file:
     
     summary_df = all_summaries[selected_cage]
 
-    # KPI cards
-    st.subheader(f"Cage {selected_cage} – Production Summary")
+    # -------------------
+    # KPI Cards with dynamic colors
+    # -------------------
+    st.subheader(f"Cage {selected_cage} – Key KPIs")
+    total_biomass = summary_df["BIOMASS_KG"].sum()
+    avg_abw       = summary_df["ABW_G"].mean()
+    avg_efcr      = summary_df["AGGREGATED_eFCR"].mean()
+
+    def kpi_color(metric, value):
+        """Returns color based on thresholds"""
+        if metric == "eFCR":
+            return "#28a745" if value < 1.5 else "#dc3545"  # Green if low, red if high
+        elif metric == "Biomass":
+            return "#1E90FF" if value > 1000 else "#FFA500"  # Blue if high, orange if low
+        elif metric == "ABW":
+            return "#17a2b8" if value > 20 else "#FFC107"   # Teal if high, yellow if low
+        return "#6c757d"  # default gray
+
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown(f'<div class="kpi-card"><h3>Total Biomass</h3><p>{summary_df["BIOMASS_KG"].sum():,.2f} kg</p></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi-card" style="background-color:{kpi_color("Biomass", total_biomass)}">'
+                    f'Total Biomass<br><span style="font-size:24px">{total_biomass:,.2f} kg</span></div>', unsafe_allow_html=True)
     with col2:
-        st.markdown(f'<div class="kpi-card"><h3>Average ABW</h3><p>{summary_df["ABW_G"].mean():,.2f} g</p></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi-card" style="background-color:{kpi_color("ABW", avg_abw)}">'
+                    f'Average ABW<br><span style="font-size:24px">{avg_abw:,.2f} g</span></div>', unsafe_allow_html=True)
     with col3:
-        st.markdown(f'<div class="kpi-card"><h3>Average eFCR</h3><p>{summary_df["AGGREGATED_eFCR"].mean():.2f}</p></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi-card" style="background-color:{kpi_color("eFCR", avg_efcr)}">'
+                    f'Average eFCR<br><span style="font-size:24px">{avg_efcr:.2f}</span></div>', unsafe_allow_html=True)
 
+    # -------------------
     # Display summary table
+    # -------------------
     show_cols = [
         "DATE","NUMBER OF FISH","ABW_G","BIOMASS_KG",
         "FEED_PERIOD_KG","FEED_AGG_KG","GROWTH_KG",
@@ -454,11 +490,13 @@ if feeding_file and harvest_file and sampling_file:
     ]
     display_summary = summary_df[[c for c in show_cols if c in summary_df.columns]]
     st.dataframe(display_summary, use_container_width=True)
-    
+
     st.write(f"**Analysis Period:** 26 Aug 2024 to 09 Jul 2025")
     st.write(f"**Data Points:** {len(display_summary)} records from {display_summary['DATE'].min().strftime('%d %b %Y')} to {display_summary['DATE'].max().strftime('%d %b %Y')}")
 
+    # -------------------
     # KPI Plots
+    # -------------------
     if selected_kpi == "Biomass":
         fig = px.line(summary_df.dropna(subset=["BIOMASS_KG"]), x="DATE", y="BIOMASS_KG", markers=True,
                       title=f"Cage {selected_cage}: Biomass Over Time", labels={"BIOMASS_KG":"Total Biomass (kg)"})
