@@ -1,63 +1,106 @@
 # -*- coding: utf-8 -*-
-import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import re
-
-st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
+from typing import Optional, List
 
 # =====================
 # Helpers
 # =====================
+
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize column names: strip, replace multiple spaces with single space, uppercase.
+    """
     df = df.copy()
     df.columns = [re.sub(r"\s+", " ", c.strip()).upper() for c in df.columns]
     return df
 
+
 def to_int_cage(series: pd.Series) -> pd.Series:
-    def _coerce(x):
-        if pd.isna(x): return None
-        if isinstance(x, (int, np.integer)): return int(x)
-        m = re.search(r"(\d+)", str(x))
-        return int(m.group(1)) if m else None
+    """
+    Convert a pandas Series of cage identifiers to integers safely.
+    Extracts the first number found in each value; returns NaN if not possible.
+    """
+    def _coerce(val) -> Optional[int]:
+        if pd.isna(val):
+            return np.nan
+        try:
+            return int(re.search(r"(\d+)", str(val)).group(1))
+        except (AttributeError, ValueError):
+            return np.nan
+
     return series.apply(_coerce)
 
-def find_col(df: pd.DataFrame, candidates, fuzzy_hint: str | None = None) -> str | None:
-    lut = {c.upper(): c for c in df.columns}
-    for name in candidates:
-        if name.upper() in lut:
-            return lut[name.upper()]
-    if fuzzy_hint:
-        for U, orig in lut.items():
-            if fuzzy_hint.upper() in U:
-                return orig
-    return None
 
-def to_number(x):
+def to_number(x) -> float:
+    """
+    Convert a value to float safely. Handles strings with commas and scientific notation.
+    Returns NaN if conversion fails.
+    """
     if pd.isna(x):
         return np.nan
     s = str(x).replace(",", "")
     m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", s)
     return float(m.group()) if m else np.nan
 
+
+def find_col(df: pd.DataFrame, candidates: List[str], fuzzy_hint: Optional[str] = None) -> Optional[str]:
+    """
+    Find a column in df that matches one of the candidates exactly (case-insensitive),
+    or partially matches fuzzy_hint if provided.
+    Returns the original column name if found, else None.
+    """
+    lut = {c.upper(): c for c in df.columns}
+
+    # Exact match first
+    for name in candidates:
+        if name.upper() in lut:
+            return lut[name.upper()]
+
+    # Fuzzy match
+    if fuzzy_hint:
+        for U, orig in lut.items():
+            if fuzzy_hint.upper() in U:
+                return orig
+
+    return None
 # =====================
 # Load data
 # =====================
 def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
+    """
+    Load and normalize fish production datasets.
+    Returns feeding, harvest, sampling, and optional transfers DataFrames.
+    """
+    # Load Excel files
     feeding  = normalize_columns(pd.read_excel(feeding_file))
     harvest  = normalize_columns(pd.read_excel(harvest_file))
     sampling = normalize_columns(pd.read_excel(sampling_file))
     transfers = normalize_columns(pd.read_excel(transfer_file)) if transfer_file else None
 
-    # Coerce cage numbers
-    for df, col_names in [(feeding, ["CAGE NUMBER"]), (sampling, ["CAGE NUMBER"]), (harvest, ["CAGE NUMBER","CAGE"])]:
+    # --------------------------
+    # Coerce cage numbers safely
+    # --------------------------
+    for df, col_names in [(feeding, ["CAGE NUMBER"]), 
+                          (sampling, ["CAGE NUMBER"]), 
+                          (harvest, ["CAGE NUMBER", "CAGE"])]:
         for col in col_names:
             if col in df.columns:
                 df["CAGE NUMBER"] = to_int_cage(df[col])
                 break
+        else:
+            # If no matching cage column, create default NaN
+            df["CAGE NUMBER"] = np.nan
 
-    # Parse dates
+    if transfers is not None:
+        for col in ["ORIGIN CAGE", "DESTINATION CAGE"]:
+            if col in transfers.columns:
+                transfers[col] = to_int_cage(transfers[col])
+
+    # --------------------------
+    # Parse dates safely
+    # --------------------------
     for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
         if df is not None and "DATE" in df.columns:
             df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
@@ -65,29 +108,22 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
     return feeding, harvest, sampling, transfers
 
 
-def to_int_cage(val):
-    """Safely convert a value to integer cage number."""
-    if pd.isna(val):
-        return np.nan
-    try:
-        return int(re.search(r"(\d+)", str(val)).group(1))
-    except (AttributeError, ValueError):
-        return np.nan
-
 def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     """
     Preprocess Cage 2 timeline with actual stocking, harvests, and optional transfers.
     Returns feeding_c2, harvest_c2, and base sampling DataFrame.
     """
+
     cage_number = 2
     start_date = pd.to_datetime("2024-08-26")
     end_date   = pd.to_datetime("2025-07-09")
 
     def _clip(df):
+        """Filter DataFrame by date range and remove missing DATEs."""
         if df is None or df.empty or "DATE" not in df.columns:
             return pd.DataFrame()
         df = df.dropna(subset=["DATE"]).sort_values("DATE")
-        return df[(df["DATE"] >= start_date) & (df["DATE"] <= end_date)]
+        return df[(df["DATE"] >= start_date) & (df["DATE"] <= end_date)].copy()
 
     # Filter by cage
     feeding_c2  = _clip(feeding[feeding.get("CAGE NUMBER", feeding.columns[0]) == cage_number])
@@ -96,10 +132,10 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
 
     # Stocking row
     stocked_fish = 7290
-    initial_abw_g = 11.9
+    initial_abw_g = 11.9  # grams
     if transfers is not None and not transfers.empty:
         t = _clip(transfers)
-        t["DEST_INT"] = t["DESTINATION CAGE"].apply(to_int_cage) if "DESTINATION CAGE" in t.columns else np.nan
+        t["DEST_INT"] = to_int_cage(t["DESTINATION CAGE"]) if "DESTINATION CAGE" in t.columns else np.nan
         inbound = t[t["DEST_INT"] == cage_number].sort_values("DATE")
         if not inbound.empty:
             first = inbound.iloc[0]
@@ -115,8 +151,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
         "STOCKED": stocked_fish
     }])
 
-    base = pd.concat([stocking_row, sampling_c2], ignore_index=True)
-    base = base.sort_values("DATE").reset_index(drop=True)
+    base = pd.concat([stocking_row, sampling_c2], ignore_index=True).sort_values("DATE").reset_index(drop=True)
     base["STOCKED"] = stocked_fish
 
     # Initialize cumulative columns
@@ -128,35 +163,40 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
         h_fish_col = find_col(harvest_c2, ["NUMBER OF FISH"], "FISH")
         h_kg_col   = find_col(harvest_c2, ["TOTAL WEIGHT [KG]", "TOTAL WEIGHT (KG)"], "WEIGHT")
         h = harvest_c2.sort_values("DATE").copy()
-        h["H_FISH"] = pd.to_numeric(h[h_fish_col], errors="coerce").fillna(0) if h_fish_col else 0
-        h["H_KG"]   = pd.to_numeric(h[h_kg_col], errors="coerce").fillna(0) if h_kg_col else 0
+        h["H_FISH"] = pd.to_numeric(h[h_fish_col], errors="coerce").fillna(0) if h_fish_col else pd.Series(0, index=h.index)
+        h["H_KG"]   = pd.to_numeric(h[h_kg_col], errors="coerce").fillna(0) if h_kg_col else pd.Series(0, index=h.index)
         h["HARV_FISH_CUM"], h["HARV_KG_CUM"] = h["H_FISH"].cumsum(), h["H_KG"].cumsum()
-        mh = pd.merge_asof(base[["DATE"]], h[["DATE","HARV_FISH_CUM","HARV_KG_CUM"]], on="DATE", direction="backward")
+        mh = pd.merge_asof(base[["DATE"]].sort_values("DATE"),
+                           h[["DATE","HARV_FISH_CUM","HARV_KG_CUM"]].sort_values("DATE"),
+                           on="DATE", direction="backward")
         base["HARV_FISH_CUM"] = mh["HARV_FISH_CUM"].fillna(0)
         base["HARV_KG_CUM"]   = mh["HARV_KG_CUM"].fillna(0)
 
     # Transfers cumulatives
     if transfers is not None and not transfers.empty:
         t = _clip(transfers)
-        # Convert origin/dest to int
-        t["ORIGIN_INT"] = t["ORIGIN CAGE"].apply(to_int_cage) if "ORIGIN CAGE" in t.columns else np.nan
-        t["DEST_INT"]   = t["DESTINATION CAGE"].apply(to_int_cage) if "DESTINATION CAGE" in t.columns else np.nan
+        t["ORIGIN_INT"] = to_int_cage(t["ORIGIN CAGE"]) if "ORIGIN CAGE" in t.columns else np.nan
+        t["DEST_INT"]   = to_int_cage(t["DESTINATION CAGE"]) if "DESTINATION CAGE" in t.columns else np.nan
 
         # Outgoing
-        tout = t[t["ORIGIN_INT"] == cage_number].sort_values("DATE")
+        tout = t[t["ORIGIN_INT"] == cage_number].sort_values("DATE").copy()
         if not tout.empty:
-            tout["OUT_FISH_CUM"] = tout["NUMBER OF FISH"].cumsum() if "NUMBER OF FISH" in tout.columns else 0
-            tout["OUT_KG_CUM"]   = tout["TOTAL WEIGHT [KG]"].cumsum() if "TOTAL WEIGHT [KG]" in tout.columns else 0
-            mo = pd.merge_asof(base[["DATE"]].sort_values("DATE"), tout[["DATE","OUT_FISH_CUM","OUT_KG_CUM"]], on="DATE", direction="backward")
+            tout["OUT_FISH_CUM"] = tout["NUMBER OF FISH"].cumsum() if "NUMBER OF FISH" in tout.columns else pd.Series(0, index=tout.index)
+            tout["OUT_KG_CUM"]   = tout["TOTAL WEIGHT [KG]"].cumsum() if "TOTAL WEIGHT [KG]" in tout.columns else pd.Series(0, index=tout.index)
+            mo = pd.merge_asof(base[["DATE"]].sort_values("DATE"),
+                               tout[["DATE","OUT_FISH_CUM","OUT_KG_CUM"]].sort_values("DATE"),
+                               on="DATE", direction="backward")
             base["OUT_FISH_CUM"] = mo["OUT_FISH_CUM"].fillna(0)
             base["OUT_KG_CUM"]   = mo["OUT_KG_CUM"].fillna(0)
 
         # Incoming
-        tin = t[t["DEST_INT"] == cage_number].sort_values("DATE")
+        tin = t[t["DEST_INT"] == cage_number].sort_values("DATE").copy()
         if not tin.empty:
-            tin["IN_FISH_CUM"] = tin["NUMBER OF FISH"].cumsum() if "NUMBER OF FISH" in tin.columns else 0
-            tin["IN_KG_CUM"]   = tin["TOTAL WEIGHT [KG]"].cumsum() if "TOTAL WEIGHT [KG]" in tin.columns else 0
-            mi = pd.merge_asof(base[["DATE"]].sort_values("DATE"), tin[["DATE","IN_FISH_CUM","IN_KG_CUM"]], on="DATE", direction="backward")
+            tin["IN_FISH_CUM"] = tin["NUMBER OF FISH"].cumsum() if "NUMBER OF FISH" in tin.columns else pd.Series(0, index=tin.index)
+            tin["IN_KG_CUM"]   = tin["TOTAL WEIGHT [KG]"].cumsum() if "TOTAL WEIGHT [KG]" in tin.columns else pd.Series(0, index=tin.index)
+            mi = pd.merge_asof(base[["DATE"]].sort_values("DATE"),
+                               tin[["DATE","IN_FISH_CUM","IN_KG_CUM"]].sort_values("DATE"),
+                               on="DATE", direction="backward")
             base["IN_FISH_CUM"] = mi["IN_FISH_CUM"].fillna(0)
             base["IN_KG_CUM"]   = mi["IN_KG_CUM"].fillna(0)
 
