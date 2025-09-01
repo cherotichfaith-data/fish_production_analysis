@@ -1,5 +1,5 @@
 # ==========================
-# Fish Cage Production Analysis App
+# Fish Cage Production Analysis (Cage 2 with Transfers)
 # ==========================
 
 import streamlit as st
@@ -8,209 +8,171 @@ import numpy as np
 import plotly.express as px
 
 # --------------------------
-# 1. Safe Excel Read + Column Standardization
+# 1. Load Data
 # --------------------------
-def read_excel_safe(file):
-    df = pd.read_excel(file)
-    # Standardize column names
-    df.columns = (
-        df.columns.astype(str)
-        .str.strip()
-        .str.lower()
-        .str.replace(' ', '_')
-        .str.replace(r'[^0-9a-zA-Z_]', '', regex=True)
-    )
-    # Convert date column if exists
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce', dayfirst=True)
-    return df
+def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
+    feeding = pd.read_excel(feeding_file, parse_dates=['DATE'], dayfirst=True)
+    harvest = pd.read_excel(harvest_file, parse_dates=['DATE'], dayfirst=True)
+    sampling = pd.read_excel(sampling_file, parse_dates=['DATE'], dayfirst=True)
+    if transfer_file:
+        transfers = pd.read_excel(transfer_file, parse_dates=['DATE'], dayfirst=True)
+    else:
+        transfers = pd.DataFrame()
+    return feeding, harvest, sampling, transfers
 
 # --------------------------
-# 2. Clean & Prepare Data
-# --------------------------
-def clean_and_prepare(feeding_df, harvest_df, sampling_df, transfer_df):
-    for df in [feeding_df, harvest_df, sampling_df, transfer_df]:
-        df.dropna(axis=1, how='all', inplace=True)
-
-    # Numeric conversion
-    numeric_cols = ['feed_amount_kg', 'total_weight_kg', 'abw_g', 'number_of_fish', 'average_body_weight_g']
-    for df in [feeding_df, harvest_df, sampling_df, transfer_df]:
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-    return feeding_df, harvest_df, sampling_df, transfer_df
-
-# --------------------------
-# 3. Preprocess Cage 2
+# 2. Preprocess Cage 2
 # --------------------------
 def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     cage_number = 2
     start_date = pd.to_datetime("2024-08-26")
     end_date = pd.to_datetime("2025-07-09")
 
-    feeding_c2 = feeding[(feeding.get('cage_number', -1)==cage_number) & 
-                         (feeding.get('date', pd.Timestamp.min) >= start_date) & 
-                         (feeding.get('date', pd.Timestamp.max) <= end_date)].copy()
-    harvest_c2 = harvest[(harvest.get('cage', -1)==cage_number) & 
-                         (harvest.get('date', pd.Timestamp.min) >= start_date) & 
-                         (harvest.get('date', pd.Timestamp.max) <= end_date)].copy()
-    sampling_c2 = sampling[(sampling.get('cage_number', -1)==cage_number) & 
-                           (sampling.get('date', pd.Timestamp.min) >= start_date) & 
-                           (sampling.get('date', pd.Timestamp.max) <= end_date)].copy()
+    feeding_c2 = feeding[(feeding['CAGE_NUMBER']==cage_number) & 
+                         (feeding['DATE']>=start_date) & (feeding['DATE']<=end_date)].copy()
+    harvest_c2 = harvest[(harvest['CAGE']==cage_number) & 
+                         (harvest['DATE']>=start_date) & (harvest['DATE']<=end_date)].copy()
+    sampling_c2 = sampling[(sampling['CAGE_NUMBER']==cage_number) & 
+                           (sampling['DATE']>=start_date) & (sampling['DATE']<=end_date)].copy()
 
-    # Numeric conversion
-    for col in ['number_of_fish', 'average_body_weight_g']:
+    # Ensure numeric columns
+    for col in ['NUMBER_OF_FISH', 'ABW_G']:
         if col in sampling_c2.columns:
             sampling_c2[col] = pd.to_numeric(sampling_c2[col], errors='coerce').fillna(0)
 
-    # Manual stocking
+    # Initial stocking row
     stocking_row = pd.DataFrame([{
-        'date': start_date,
-        'cage_number': cage_number,
-        'number_of_fish': 7290,
-        'average_body_weight_g': 11.9
+        'DATE': start_date,
+        'CAGE_NUMBER': cage_number,
+        'NUMBER_OF_FISH': 7290,
+        'ABW_G': 11.9
     }])
-    sampling_c2 = pd.concat([stocking_row, sampling_c2]).sort_values('date').reset_index(drop=True)
+    sampling_c2 = pd.concat([stocking_row, sampling_c2]).sort_values('DATE').reset_index(drop=True)
 
-    # Transfers
-    sampling_c2['IN_FISH'] = 0
-    sampling_c2['OUT_FISH'] = 0
+    # Add transfer columns
+    sampling_c2['TRANSFER_IN_FISH'] = 0
+    sampling_c2['TRANSFER_OUT_FISH'] = 0
     if transfers is not None and not transfers.empty:
-        transfers_c2 = transfers
-        # Outgoing
-        out_mask = transfers_c2.get('origin_cage', pd.Series()) == cage_number
+        transfers_c2 = transfers.copy()
+        in_mask = transfers_c2.get('DESTINATION_CAGE', pd.Series()) == cage_number
+        out_mask = transfers_c2.get('ORIGIN_CAGE', pd.Series()) == cage_number
+
         if out_mask.any():
-            out_transfers = transfers_c2[out_mask].groupby('date')['number_of_fish'].sum().cumsum().reset_index()
-            out_transfers.rename(columns={'number_of_fish':'OUT_FISH'}, inplace=True)
-            sampling_c2 = pd.merge_asof(sampling_c2.sort_values('date'), out_transfers.sort_values('date'),
-                                        on='date', direction='backward')
-        # Incoming
-        in_mask = transfers_c2.get('destination_cage', pd.Series()) == cage_number
+            out_transfers = transfers_c2[out_mask].groupby('DATE')['NUMBER_OF_FISH'].sum().cumsum().reset_index()
+            out_transfers.rename(columns={'NUMBER_OF_FISH':'TRANSFER_OUT_FISH'}, inplace=True)
+            sampling_c2 = pd.merge_asof(sampling_c2.sort_values('DATE'), 
+                                        out_transfers.sort_values('DATE'), on='DATE', direction='backward')
         if in_mask.any():
-            in_transfers = transfers_c2[in_mask].groupby('date')['number_of_fish'].sum().cumsum().reset_index()
-            in_transfers.rename(columns={'number_of_fish':'IN_FISH'}, inplace=True)
-            sampling_c2 = pd.merge_asof(sampling_c2.sort_values('date'), in_transfers.sort_values('date'),
-                                        on='date', direction='backward')
+            in_transfers = transfers_c2[in_mask].groupby('DATE')['NUMBER_OF_FISH'].sum().cumsum().reset_index()
+            in_transfers.rename(columns={'NUMBER_OF_FISH':'TRANSFER_IN_FISH'}, inplace=True)
+            sampling_c2 = pd.merge_asof(sampling_c2.sort_values('DATE'), 
+                                        in_transfers.sort_values('DATE'), on='DATE', direction='backward')
 
-        sampling_c2[['IN_FISH','OUT_FISH']] = sampling_c2[['IN_FISH','OUT_FISH']].fillna(0)
+        sampling_c2[['TRANSFER_IN_FISH','TRANSFER_OUT_FISH']] = sampling_c2[['TRANSFER_IN_FISH','TRANSFER_OUT_FISH']].fillna(0)
 
-    # Fish alive & biomass
-    sampling_c2['FISH_ALIVE'] = (sampling_c2['number_of_fish'] + sampling_c2['IN_FISH'] - sampling_c2['OUT_FISH']).clip(lower=0)
-    sampling_c2['BIOMASS_KG'] = sampling_c2['FISH_ALIVE'] * sampling_c2['average_body_weight_g'] / 1000
+    # Compute fish alive & biomass
+    sampling_c2['FISH_ALIVE'] = (sampling_c2['NUMBER_OF_FISH'] + sampling_c2['TRANSFER_IN_FISH'] - sampling_c2['TRANSFER_OUT_FISH']).clip(lower=0)
+    sampling_c2['BIOMASS_KG'] = sampling_c2['FISH_ALIVE'] * sampling_c2['ABW_G'] / 1000
 
     return feeding_c2, harvest_c2, sampling_c2
 
 # --------------------------
-# 4. Production Summary
+# 3. Compute Production Summary
 # --------------------------
-def cage2_production_summary(feeding_c2, sampling_c2, harvest_c2):
-    df = sampling_c2.sort_values('date').reset_index(drop=True)
-    feeding_c2 = feeding_c2.sort_values('date')
+def compute_summary(feeding_c2, sampling_c2, harvest_c2=None):
+    df = sampling_c2.sort_values('DATE').reset_index(drop=True)
+    df['FEED_PERIOD_KG'] = 0
+    df['FEED_AGG_KG'] = 0
+    df['GROWTH_KG'] = 0
+    df['HARVEST_FISH'] = 0
+    df['HARVEST_KG'] = 0
+    df['FISH_COUNT_DISCREPANCY'] = 0
 
-    df['PERIOD_FEED_KG'] = 0
-    for i in range(1,len(df)):
-        start,end = df.loc[i-1,'date'], df.loc[i,'date']
-        mask = (feeding_c2.get('date', pd.Series()) > start) & (feeding_c2.get('date', pd.Series()) <= end)
-        if 'feed_amount_kg' in feeding_c2.columns:
-            df.loc[i,'PERIOD_FEED_KG'] = feeding_c2.loc[mask,'feed_amount_kg'].sum()
+    feeding_c2 = feeding_c2.sort_values('DATE')
+    if harvest_c2 is not None:
+        harvest_c2 = harvest_c2.sort_values('DATE')
 
-    df['CUM_FEED_KG'] = df['PERIOD_FEED_KG'].cumsum()
-    df['PREV_BIOMASS_KG'] = df['BIOMASS_KG'].shift(1).fillna(0)
-    df['DELTA_BIOMASS_KG'] = df['BIOMASS_KG'] - df['PREV_BIOMASS_KG']
+    for i in range(1, len(df)):
+        start_date = df.loc[i-1, 'DATE']
+        end_date = df.loc[i, 'DATE']
+        # Period feed
+        mask = (feeding_c2['DATE']>start_date) & (feeding_c2['DATE']<=end_date)
+        df.loc[i, 'FEED_PERIOD_KG'] = feeding_c2.loc[mask,'FEED_AMOUNT_KG'].sum()
+        df.loc[i, 'FEED_AGG_KG'] = df['FEED_PERIOD_KG'][:i+1].sum()
+        # Growth
+        df.loc[i, 'GROWTH_KG'] = df.loc[i,'BIOMASS_KG'] - df.loc[i-1,'BIOMASS_KG']
+        # Harvest
+        if harvest_c2 is not None and not harvest_c2.empty:
+            hmask = (harvest_c2['DATE']>start_date) & (harvest_c2['DATE']<=end_date)
+            df.loc[i,'HARVEST_FISH'] = harvest_c2.loc[hmask,'NUMBER_OF_FISH'].sum()
+            df.loc[i,'HARVEST_KG'] = harvest_c2.loc[hmask,'TOTAL_WEIGHT_KG'].sum()
+        # Fish discrepancy
+        df.loc[i,'FISH_COUNT_DISCREPANCY'] = df.loc[i,'NUMBER_OF_FISH'] + df.loc[i,'TRANSFER_IN_FISH'] - df.loc[i,'TRANSFER_OUT_FISH'] - df.loc[i,'FISH_ALIVE'] - df.loc[i,'HARVEST_FISH']
 
-    df['PERIOD_eFCR'] = df.apply(lambda row: row['PERIOD_FEED_KG']/row['DELTA_BIOMASS_KG']
-                                 if row['DELTA_BIOMASS_KG']>0 else np.nan, axis=1)
-    df['AGGREGATED_eFCR'] = df['CUM_FEED_KG']/df['BIOMASS_KG'].replace(0,np.nan)
-    df['AVERAGE_BODY_WEIGHT_G'] = df['average_body_weight_g']
-    df['FISH_ALIVE'] = pd.to_numeric(df['FISH_ALIVE'], errors='coerce').fillna(0)
+    # First row
+    df.loc[0,'FEED_PERIOD_KG'] = 0
+    df.loc[0,'FEED_AGG_KG'] = 0
+    df.loc[0,'GROWTH_KG'] = df.loc[0,'BIOMASS_KG']
+    df.loc[0,'HARVEST_FISH'] = 0
+    df.loc[0,'HARVEST_KG'] = 0
+    df.loc[0,'FISH_COUNT_DISCREPANCY'] = df.loc[0,'NUMBER_OF_FISH'] + df.loc[0,'TRANSFER_IN_FISH'] - df.loc[0,'TRANSFER_OUT_FISH'] - df.loc[0,'FISH_ALIVE']
 
-    summary = df[['date','FISH_ALIVE','AVERAGE_BODY_WEIGHT_G','BIOMASS_KG',
-                  'PERIOD_FEED_KG','CUM_FEED_KG','DELTA_BIOMASS_KG','PERIOD_eFCR','AGGREGATED_eFCR']].copy()
-    return summary
+    # eFCR
+    df['PERIOD_eFCR'] = df['FEED_PERIOD_KG'] / df['GROWTH_KG'].replace(0,np.nan)
+    df['AGGREGATED_eFCR'] = df['FEED_AGG_KG'] / df['BIOMASS_KG'].replace(0,np.nan)
 
-# --------------------------
-# 5. Mock Cages
-# --------------------------
-def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
-    mock_summaries = {}
-    for cage in range(3,3+num_cages):
-        f = feeding_c2.copy()
-        f['cage_number'] = cage
-        if 'feed_amount_kg' in f.columns:
-            f['feed_amount_kg'] *= np.random.uniform(0.9,1.1,size=len(f))
-
-        s = sampling_c2.copy()
-        s['cage_number'] = cage
-        if 'average_body_weight_g' in s.columns:
-            s['average_body_weight_g'] *= np.random.uniform(0.95,1.05,size=len(s))
-        s['FISH_ALIVE'] = pd.to_numeric(s['FISH_ALIVE'], errors='coerce').fillna(0)
-        s['BIOMASS_KG'] = s['FISH_ALIVE']*s['average_body_weight_g']/1000
-
-        h = harvest_c2.copy()
-        h['cage'] = cage
-        if 'total_weight_kg' in h.columns:
-            h['total_weight_kg'] *= np.random.uniform(0.95,1.05,size=len(h))
-        if 'number_of_fish' in h.columns:
-            h['number_of_fish'] = pd.to_numeric(h['number_of_fish'], errors='coerce').fillna(0)
-
-        summary = cage2_production_summary(f,s,h)
-        mock_summaries[cage] = summary
-    return mock_summaries
+    return df
 
 # --------------------------
-# 6. Streamlit Interface
+# 4. Streamlit App
 # --------------------------
-st.title("Fish Cage Production Analysis")
-st.sidebar.header("Upload Excel Files (Cage 2)")
+st.title("Fish Cage Production Analysis (with Transfers)")
+st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
-feeding_file = st.sidebar.file_uploader("Feeding Record", type=["xlsx"])
-harvest_file = st.sidebar.file_uploader("Fish Harvest", type=["xlsx"])
-sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
+feeding_file  = st.sidebar.file_uploader("Feeding Record",    type=["xlsx"])
+harvest_file  = st.sidebar.file_uploader("Fish Harvest",      type=["xlsx"])
+sampling_file = st.sidebar.file_uploader("Fish Sampling",     type=["xlsx"])
 transfer_file = st.sidebar.file_uploader("Fish Transfer (optional)", type=["xlsx"])
 
 if feeding_file and harvest_file and sampling_file:
-    feeding = read_excel_safe(feeding_file)
-    harvest = read_excel_safe(harvest_file)
-    sampling = read_excel_safe(sampling_file)
-    transfer = read_excel_safe(transfer_file) if transfer_file else pd.DataFrame()
+    feeding, harvest, sampling, transfers = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
+    feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling, transfers)
+    summary_c2 = compute_summary(feeding_c2, sampling_c2, harvest_c2)
 
-    feeding, harvest, sampling, transfer = clean_and_prepare(feeding, harvest, sampling, transfer)
+    st.subheader("Cage 2 – Production Summary (period-based)")
+    show_cols = [
+        "DATE","NUMBER_OF_FISH","ABW_G","BIOMASS_KG",
+        "FEED_PERIOD_KG","FEED_AGG_KG","GROWTH_KG",
+        "TRANSFER_IN_FISH","TRANSFER_OUT_FISH","HARVEST_FISH",
+        "TRANSFER_IN_KG","TRANSFER_OUT_KG","HARVEST_KG",
+        "FISH_COUNT_DISCREPANCY",
+        "PERIOD_eFCR","AGGREGATED_eFCR",
+    ]
+    # Fill transfer KG if ABW_G exists
+    if 'ABW_G' in summary_c2.columns:
+        summary_c2['TRANSFER_IN_KG'] = summary_c2['TRANSFER_IN_FISH'] * summary_c2['ABW_G']/1000
+        summary_c2['TRANSFER_OUT_KG'] = summary_c2['TRANSFER_OUT_FISH'] * summary_c2['ABW_G']/1000
 
-    feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling, transfer)
-    summary_c2 = cage2_production_summary(feeding_c2, sampling_c2, harvest_c2)
-    mock_summaries = generate_mock_cages(feeding_c2, sampling_c2, harvest_c2)
+    st.dataframe(summary_c2[[c for c in show_cols if c in summary_c2.columns]].round(2))
 
-    all_cages = {2: summary_c2, **mock_summaries}
-
-    # Sidebar selectors
-    st.sidebar.header("Options")
-    selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_cages.keys()))
-    selected_kpi = st.sidebar.selectbox("Select KPI", ["Growth", "eFCR"])
-
-    df = all_cages[selected_cage].copy()
-    st.subheader(f"Cage {selected_cage} Production Summary")
-    st.dataframe(df[['date','FISH_ALIVE','BIOMASS_KG','PERIOD_FEED_KG',
-                     'CUM_FEED_KG','PERIOD_eFCR','AGGREGATED_eFCR']].round(2))
-
-    # Plot KPI
-    if selected_kpi == "Growth":
-        fig = px.line(df, x='date', y='BIOMASS_KG',
-                      markers=True,
-                      title=f'Cage {selected_cage} Biomass Growth',
-                      labels={'BIOMASS_KG':'Biomass (Kg)','date':'Date'})
-        st.plotly_chart(fig)
+    # KPI selection
+    selected_kpi = st.sidebar.selectbox("Select KPI", ["Biomass","ABW","eFCR"])
+    if selected_kpi == "Biomass":
+        fig = px.line(summary_c2.dropna(subset=["BIOMASS_KG"]), x="DATE", y="BIOMASS_KG", markers=True,
+                      title="Cage 2: Biomass Over Time", labels={"BIOMASS_KG":"Total Biomass (kg)"})
+        st.plotly_chart(fig, use_container_width=True)
+    elif selected_kpi == "ABW":
+        fig = px.line(summary_c2.dropna(subset=["ABW_G"]), x="DATE", y="ABW_G", markers=True,
+                      title="Cage 2: Average Body Weight Over Time", labels={"ABW_G":"ABW (g)"})
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        df_plot = df.dropna(subset=['AGGREGATED_eFCR','PERIOD_eFCR'], how='all')
-        if not df_plot.empty:
-            fig = px.line(df_plot, x='date', y='AGGREGATED_eFCR',
-                          markers=True,
-                          title=f'Cage {selected_cage} eFCR Over Time',
-                          labels={'AGGREGATED_eFCR':'Aggregated eFCR','date':'Date'})
-            fig.add_scatter(x=df_plot['date'], y=df_plot['PERIOD_eFCR'],
-                            mode='lines+markers', name='Period eFCR')
-            st.plotly_chart(fig)
-        else:
-            st.warning("No eFCR data available to plot for this cage.")
+        dff = summary_c2.dropna(subset=["AGGREGATED_eFCR","PERIOD_eFCR"])
+        fig = px.line(dff, x="DATE", y="AGGREGATED_eFCR", markers=True,
+                      title="Cage 2: eFCR Over Time", labels={"AGGREGATED_eFCR":"Aggregated eFCR"})
+        fig.update_traces(showlegend=True, name="Aggregated eFCR")
+        fig.add_scatter(x=dff["DATE"], y=dff["PERIOD_eFCR"], mode="lines+markers", 
+                        name="Period eFCR", showlegend=True, line=dict(dash="dash"))
+        fig.update_layout(yaxis_title="eFCR", legend_title_text="Legend")
+        st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Please upload all required Excel files to start the analysis.")
+    st.info("Upload the Excel files to begin.")
