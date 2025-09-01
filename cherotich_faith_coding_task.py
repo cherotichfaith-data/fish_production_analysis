@@ -11,30 +11,54 @@ def load_data(feeding_file, harvest_file, sampling_file):
     sampling = pd.read_excel(sampling_file)
     return feeding, harvest, sampling
 
-# 2. Preprocess Cage 2
+# ===========================
+# 2. Preprocess Cage 2 Robustly
+# ===========================
 def preprocess_cage2(feeding, harvest, sampling):
     cage_number = 2
 
+    # Normalize column names: strip spaces and uppercase
+    feeding.columns = feeding.columns.str.strip().str.upper()
+    harvest.columns = harvest.columns.str.strip().str.upper()
+    sampling.columns = sampling.columns.str.strip().str.upper()
+
+    # Ensure essential columns exist
+    required_sampling_cols = ['CAGE NUMBER', 'DATE', 'NUMBER OF FISH', 'AVERAGE BODY WEIGHT (G)']
+    for col in required_sampling_cols:
+        if col not in sampling.columns:
+            sampling[col] = np.nan
+
+    required_feeding_cols = ['CAGE NUMBER', 'DATE', 'FEED AMOUNT (KG)']
+    for col in required_feeding_cols:
+        if col not in feeding.columns:
+            feeding[col] = np.nan
+
     # Filter Cage 2
     feeding_c2 = feeding[feeding['CAGE NUMBER'] == cage_number].copy()
-    harvest_c2 = harvest[harvest['CAGE'] == cage_number].copy()
+    harvest_c2 = harvest[harvest['CAGE'] == cage_number].copy() if 'CAGE' in harvest.columns else pd.DataFrame()
     sampling_c2 = sampling[sampling['CAGE NUMBER'] == cage_number].copy()
 
     # Ensure numeric columns
-    sampling_c2['NUMBER OF FISH'] = pd.to_numeric(sampling_c2['NUMBER OF FISH'], errors='coerce')
-    sampling_c2['AVERAGE BODY WEIGHT (g)'] = pd.to_numeric(sampling_c2['AVERAGE BODY WEIGHT (g)'], errors='coerce')
+    sampling_c2['NUMBER OF FISH'] = pd.to_numeric(sampling_c2['NUMBER OF FISH'], errors='coerce').fillna(0)
+    sampling_c2['AVERAGE BODY WEIGHT (G)'] = pd.to_numeric(sampling_c2['AVERAGE BODY WEIGHT (G)'], errors='coerce').fillna(0)
+    feeding_c2['FEED AMOUNT (KG)'] = pd.to_numeric(feeding_c2['FEED AMOUNT (KG)'], errors='coerce').fillna(0)
 
-    # Add stocking manually
+    # Add initial stocking manually if not present
     stocking_date = pd.to_datetime("2024-08-26")
     stocked_fish = 7290
     initial_abw = 11.9
-    stocking_row = pd.DataFrame([{
-        'DATE': stocking_date,
-        'CAGE NUMBER': cage_number,
-        'NUMBER OF FISH': stocked_fish,
-        'AVERAGE BODY WEIGHT (g)': initial_abw
-    }])
-    sampling_c2 = pd.concat([stocking_row, sampling_c2]).sort_values('DATE')
+    if not ((sampling_c2['DATE'] == stocking_date) & (sampling_c2['NUMBER OF FISH'] == stocked_fish)).any():
+        stocking_row = pd.DataFrame([{
+            'DATE': stocking_date,
+            'CAGE NUMBER': cage_number,
+            'NUMBER OF FISH': stocked_fish,
+            'AVERAGE BODY WEIGHT (G)': initial_abw
+        }])
+        sampling_c2 = pd.concat([stocking_row, sampling_c2], ignore_index=True)
+
+    # Convert DATE column to datetime
+    sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'], errors='coerce')
+    feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'], errors='coerce')
 
     # Limit timeframe
     start_date = pd.to_datetime("2024-07-16")
@@ -48,39 +72,41 @@ def preprocess_cage2(feeding, harvest, sampling):
         feeding_c2 = pd.DataFrame({
             'DATE': date_range,
             'CAGE NUMBER': cage_number,
-            'FEED AMOUNT (Kg)': np.random.uniform(5, 15, size=len(date_range))
+            'FEED AMOUNT (KG)': np.random.uniform(5, 15, size=len(date_range))
         })
-        # Smooth synthetic feed
-        feeding_c2['FEED AMOUNT (Kg)'] = feeding_c2['FEED AMOUNT (Kg)'].rolling(3, min_periods=1).mean()
+        feeding_c2['FEED AMOUNT (KG)'] = feeding_c2['FEED AMOUNT (KG)'].rolling(3, min_periods=1).mean()
 
     # Sort by date
-    feeding_c2 = feeding_c2.sort_values('DATE')
-    sampling_c2 = sampling_c2.sort_values('DATE')
+    feeding_c2 = feeding_c2.sort_values('DATE').reset_index(drop=True)
+    sampling_c2 = sampling_c2.sort_values('DATE').reset_index(drop=True)
 
     return feeding_c2, harvest_c2, sampling_c2
 
 
-# 3. Compute production summary
+# ===========================
+# 3. Compute Summary Robustly
+# ===========================
 def compute_summary(feeding_c2, sampling_c2):
-    feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'])
-    sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'])
+    # Ensure DATE columns are datetime
+    feeding_c2['DATE'] = pd.to_datetime(feeding_c2['DATE'], errors='coerce')
+    sampling_c2['DATE'] = pd.to_datetime(sampling_c2['DATE'], errors='coerce')
 
-    # cumulative feed
-    feeding_c2['CUM_FEED'] = feeding_c2['FEED AMOUNT (Kg)'].cumsum()
+    # Compute cumulative feed
+    feeding_c2['CUM_FEED'] = feeding_c2['FEED AMOUNT (KG)'].cumsum()
 
-    # total biomass in kg
-    sampling_c2['TOTAL_WEIGHT_KG'] = sampling_c2['NUMBER OF FISH'] * sampling_c2['AVERAGE BODY WEIGHT (g)'] / 1000
+    # Compute total biomass
+    sampling_c2['TOTAL_WEIGHT_KG'] = sampling_c2['NUMBER OF FISH'] * sampling_c2['AVERAGE BODY WEIGHT (G)'] / 1000
 
-    # merge feed to sampling by date
+    # Merge cumulative feed to sampling
     summary = pd.merge_asof(
         sampling_c2.sort_values('DATE'),
-        feeding_c2.sort_values('DATE')[['DATE', 'CUM_FEED']],
+        feeding_c2[['DATE', 'CUM_FEED']].sort_values('DATE'),
         on='DATE',
         direction='backward'
     )
 
     # eFCR calculations
-    epsilon = 1e-6  # avoid division by zero
+    epsilon = 1e-6  # prevent division by zero
     summary['AGGREGATED_eFCR'] = summary['CUM_FEED'] / (summary['TOTAL_WEIGHT_KG'] + epsilon)
     summary['PERIOD_WEIGHT_GAIN'] = summary['TOTAL_WEIGHT_KG'].diff().fillna(summary['TOTAL_WEIGHT_KG'])
     summary['PERIOD_FEED'] = summary['CUM_FEED'].diff().fillna(summary['CUM_FEED'])
