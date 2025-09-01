@@ -12,15 +12,20 @@ def load_data(feeding_file, harvest_file, sampling_file):
     harvest = pd.read_excel(harvest_file)
     sampling = pd.read_excel(sampling_file)
 
-    # Strip columns to prevent KeyErrors
+    # Strip columns
     feeding.columns = feeding.columns.str.strip()
     harvest.columns = harvest.columns.str.strip()
     sampling.columns = sampling.columns.str.strip()
 
-    # Convert DATE columns to datetime
-    feeding['DATE'] = pd.to_datetime(feeding['DATE'])
-    harvest['DATE'] = pd.to_datetime(harvest['DATE'])
-    sampling['DATE'] = pd.to_datetime(sampling['DATE'])
+    # Convert DATE columns to datetime safely
+    feeding['DATE'] = pd.to_datetime(feeding['DATE'], errors='coerce')
+    harvest['DATE'] = pd.to_datetime(harvest['DATE'], errors='coerce')
+    sampling['DATE'] = pd.to_datetime(sampling['DATE'], errors='coerce')
+
+    # Drop rows with invalid dates
+    feeding = feeding.dropna(subset=['DATE'])
+    harvest = harvest.dropna(subset=['DATE'])
+    sampling = sampling.dropna(subset=['DATE'])
 
     return feeding, harvest, sampling
 
