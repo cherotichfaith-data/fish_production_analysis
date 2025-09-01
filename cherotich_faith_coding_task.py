@@ -24,9 +24,9 @@ def preprocess_cage2(feeding, harvest, sampling):
     sampling_c2 = sampling[sampling['CAGE NUMBER'] == cage_number].copy()
 
     # Add stocking manually
-    stocking_date = pd.to_datetime("2024-07-16")
-    stocked_fish = 7902
-    initial_abw = 0.7
+    stocking_date = pd.to_datetime("2024-08-26")
+    stocked_fish = 7290
+    initial_abw = 11.9
     stocking_row = pd.DataFrame([{
         'DATE': stocking_date,
         'CAGE NUMBER': cage_number,
@@ -36,8 +36,8 @@ def preprocess_cage2(feeding, harvest, sampling):
     sampling_c2 = pd.concat([stocking_row, sampling_c2]).sort_values('DATE')
 
     # Limit timeframe
-    start_date = pd.to_datetime("2024-07-16")
-    end_date = pd.to_datetime("2025-06-30")
+    start_date = pd.to_datetime("2024-08-26")
+    end_date = pd.to_datetime("2025-07-09")
     sampling_c2 = sampling_c2[(sampling_c2['DATE'] >= start_date) & (sampling_c2['DATE'] <= end_date)]
     feeding_c2 = feeding_c2[(feeding_c2['DATE'] >= start_date) & (feeding_c2['DATE'] <= end_date)]
 
