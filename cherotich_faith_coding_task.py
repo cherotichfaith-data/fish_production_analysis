@@ -162,7 +162,8 @@ if feeding_file and harvest_file and sampling_file:
         df['AGGREGATED_eFCR'] = pd.to_numeric(df['AGGREGATED_eFCR'], errors='coerce')
         df['PERIOD_eFCR'] = pd.to_numeric(df['PERIOD_eFCR'], errors='coerce')
         df = df.dropna(subset=['AGGREGATED_eFCR','PERIOD_eFCR'])
-        fig = px.line(df, x='DATE', y='AGGREGATED_eFCR', markers=True, name='Aggregated eFCR')
+        fig = px.line(df, x='DATE', y='AGGREGATED_eFCR', markers=True)
         fig.add_scatter(x=df['DATE'], y=df['PERIOD_eFCR'], mode='lines+markers', name='Period eFCR')
         fig.update_layout(title=f'Cage {selected_cage}: eFCR Over Time', yaxis_title='eFCR')
+
         st.plotly_chart(fig)
