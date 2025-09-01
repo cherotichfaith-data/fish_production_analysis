@@ -351,9 +351,63 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
     return mock_feeding, mock_sampling, mock_harvest, mock_summaries
 
 # ===========================
-# Streamlit UI – Cage Selection + KPI
+# Streamlit UI – Cage Selection + KPI (Styled)
 # ===========================
-st.title("Fish Cage Production Analysis Dashboard")
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+
+# Page config
+st.set_page_config(
+    page_title="Fish Cage Production Dashboard",
+    layout="wide",
+    page_icon="🐟"
+)
+
+# Custom CSS for styling
+st.markdown("""
+    <style>
+    /* Main title */
+    .main-title {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1E90FF;
+        text-align: center;
+        margin-bottom: 20px;
+    }
+
+    /* Sidebar headers */
+    .sidebar .stHeader {
+        color: #1E90FF;
+        font-weight: bold;
+    }
+
+    /* KPI summary cards */
+    .kpi-card {
+        background-color: #f0f8ff;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        margin-bottom: 10px;
+    }
+
+    /* Table styling */
+    .dataframe th {
+        background-color: #1E90FF;
+        color: white;
+    }
+
+    .dataframe td {
+        font-size: 14px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Main title
+st.markdown('<div class="main-title">Fish Cage Production Analysis Dashboard</div>', unsafe_allow_html=True)
+
+# Sidebar upload & selections
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
 feeding_file  = st.sidebar.file_uploader("Feeding Record", type=["xlsx"])
@@ -379,8 +433,17 @@ if feeding_file and harvest_file and sampling_file:
     
     summary_df = all_summaries[selected_cage]
 
+    # KPI cards
+    st.subheader(f"Cage {selected_cage} – Production Summary")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f'<div class="kpi-card"><h3>Total Biomass</h3><p>{summary_df["BIOMASS_KG"].sum():,.2f} kg</p></div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown(f'<div class="kpi-card"><h3>Average ABW</h3><p>{summary_df["ABW_G"].mean():,.2f} g</p></div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown(f'<div class="kpi-card"><h3>Average eFCR</h3><p>{summary_df["AGGREGATED_eFCR"].mean():.2f}</p></div>', unsafe_allow_html=True)
+
     # Display summary table
-    st.subheader(f"Cage {selected_cage} – Production Summary (period-based)")
     show_cols = [
         "DATE","NUMBER OF FISH","ABW_G","BIOMASS_KG",
         "FEED_PERIOD_KG","FEED_AGG_KG","GROWTH_KG",
@@ -390,7 +453,8 @@ if feeding_file and harvest_file and sampling_file:
         "PERIOD_eFCR","AGGREGATED_eFCR",
     ]
     display_summary = summary_df[[c for c in show_cols if c in summary_df.columns]]
-    st.dataframe(display_summary)
+    st.dataframe(display_summary, use_container_width=True)
+    
     st.write(f"**Analysis Period:** 26 Aug 2024 to 09 Jul 2025")
     st.write(f"**Data Points:** {len(display_summary)} records from {display_summary['DATE'].min().strftime('%d %b %Y')} to {display_summary['DATE'].max().strftime('%d %b %Y')}")
 
