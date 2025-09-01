@@ -42,10 +42,6 @@ check_missing(harvest, "Harvest")
 check_missing(sampling, "Sampling")
 check_missing(transfer, "Transfer")
 
-"""*   The most important features: date, cage, number of fish, weights do not have missing values
-*   Secondary columns like comments, feeding response, unnamed columns and weight estimates have missing values.
-"""
-
 # Inspect DataFrame Column Data Types
 def show_dtypes(df, name):
     """
