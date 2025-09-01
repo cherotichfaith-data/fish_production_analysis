@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
+from typing import List, Optional
 import pandas as pd
 import numpy as np
 import plotly.express as px
