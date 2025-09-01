@@ -168,13 +168,23 @@ def compute_summary(feeding_c2, sampling_c2):
     s = sampling_c2.copy().sort_values("DATE")
     s["ABW_G"] = pd.to_numeric(s["AVERAGE BODY WEIGHT(G)"], errors="coerce")
     s["BIOMASS_KG"] = s["ABW_G"] * s["NUMBER OF FISH"] / 1000.0
-    # eFCR
-    feeding_c2["FEED_AMOUNT_KG"] = pd.to_numeric(find_col(feeding_c2, ["FEED AMOUNT (KG)","FEED_KG"]) and feeding_c2[find_col(feeding_c2, ["FEED AMOUNT (KG)","FEED_KG"])] or 0, errors="coerce").fillna(0)
+
+    # --------------------------
+    # Handle feeding column safely
+    # --------------------------
+    feed_col = find_col(feeding_c2, ["FEED AMOUNT (KG)","FEED_KG"])
+    if feed_col and feed_col in feeding_c2.columns:
+        feeding_c2["FEED_AMOUNT_KG"] = pd.to_numeric(feeding_c2[feed_col], errors="coerce").fillna(0)
+    else:
+        feeding_c2["FEED_AMOUNT_KG"] = 0
+
+    # eFCR calculations
     s["FEED_CUM_KG"] = feeding_c2["FEED_AMOUNT_KG"].cumsum()
     s["PERIOD_FEED"] = s["FEED_CUM_KG"].diff().fillna(s["FEED_CUM_KG"])
     s["PERIOD_WEIGHT_GAIN"] = s["BIOMASS_KG"].diff().fillna(s["BIOMASS_KG"])
-    s["PERIOD_eFCR"] = (s["PERIOD_FEED"]/s["PERIOD_WEIGHT_GAIN"]).replace([np.inf, -np.inf], np.nan)
-    s["AGGREGATED_eFCR"] = (s["FEED_CUM_KG"]/s["BIOMASS_KG"]).replace([np.inf, -np.inf], np.nan)
+    s["PERIOD_eFCR"] = (s["PERIOD_FEED"] / s["PERIOD_WEIGHT_GAIN"]).replace([np.inf, -np.inf], np.nan)
+    s["AGGREGATED_eFCR"] = (s["FEED_CUM_KG"] / s["BIOMASS_KG"]).replace([np.inf, -np.inf], np.nan)
+
     return s
 
 # =====================
