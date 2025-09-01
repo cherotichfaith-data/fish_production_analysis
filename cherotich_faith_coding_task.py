@@ -127,7 +127,7 @@ def create_mock_cages(summary_c2, feeding_c2, sampling_c2):
 # -------------------------------
 # 5. Streamlit interface
 # -------------------------------
-st.title("🐟 Fish Cage Production Analysis")
+st.title("Fish Cage Production Analysis")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
 feeding_file = st.sidebar.file_uploader("Feeding Record", type=["xlsx"])
