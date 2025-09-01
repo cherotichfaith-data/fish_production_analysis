@@ -334,7 +334,18 @@ if feeding_file and harvest_file and sampling_file:
 
     # Production Summary Table
     st.subheader("Cage 2 Production Summary")
-    st.dataframe(summary_c2[["DATE","NUMBER OF FISH","ABW_G","BIOMASS_KG","PERIOD_FEED","PERIOD_WEIGHT_GAIN","PERIOD_eFCR","AGGREGATED_eFCR"]].round(2))
+    st.dataframe(
+    summary_c2[[
+        "DATE",
+        "NUMBER OF FISH",
+        "ABW_G",
+        "BIOMASS_KG",
+        "FEED_PERIOD_KG",
+        "GROWTH_KG",
+        "PERIOD_eFCR",
+        "AGGREGATED_eFCR"
+    ]].round(2)
+)
 
 else:
     st.warning("Upload the Excel files to begin.")
