@@ -80,6 +80,8 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     """
     Preprocess Cage 2 timeline (or any cage) with consistent columns:
     ABW_G, FISH_ALIVE, STOCKED, HARV_FISH_CUM, HARV_KG_CUM, IN/OUT cumulatives.
+    Ensures timeline starts with actual stocking (fallback 7290 fish @ 11.9g)
+    and includes final harvest date.
     """
     cage_number = 2
     start_date = pd.to_datetime("2024-08-26")
@@ -94,19 +96,21 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
         df = df.dropna(subset=["DATE"]).sort_values("DATE")
         return df[(df["DATE"] >= start_date) & (df["DATE"] <= end_date)]
 
-    feeding_c2  = _clip(feeding[feeding["CAGE NUMBER"] == cage_number] if "CAGE NUMBER" in feeding.columns else feeding)
-    harvest_c2  = _clip(harvest[harvest["CAGE NUMBER"] == cage_number] if "CAGE NUMBER" in harvest.columns else harvest)
-    sampling_c2 = _clip(sampling[sampling["CAGE NUMBER"] == cage_number] if "CAGE NUMBER" in sampling.columns else sampling)
+    feeding_c2  = _clip(feeding[feeding.get("CAGE NUMBER", -1) == cage_number] if "CAGE NUMBER" in feeding.columns else feeding)
+    harvest_c2  = _clip(harvest[harvest.get("CAGE NUMBER", -1) == cage_number] if "CAGE NUMBER" in harvest.columns else harvest)
+    sampling_c2 = _clip(sampling[sampling.get("CAGE NUMBER", -1) == cage_number] if "CAGE NUMBER" in sampling.columns else sampling)
 
     # ----------------------
     # Standardize ABW column
     # ----------------------
-    abw_col_candidates = ["AVERAGE_BODY_WEIGHT(G)", "ABW(G)", "ABW_G", "ABW"]
-    for col in abw_col_candidates:
+    abw_candidates = ["AVERAGE_BODY_WEIGHT(G)", "ABW(G)", "ABW_G", "ABW"]
+    abw_set = False
+    for col in abw_candidates:
         if col in sampling_c2.columns:
             sampling_c2["ABW_G"] = pd.to_numeric(sampling_c2[col].map(to_number), errors="coerce")
+            abw_set = True
             break
-    if "ABW_G" not in sampling_c2.columns:
+    if not abw_set:
         sampling_c2["ABW_G"] = np.nan
 
     # ----------------------
@@ -114,11 +118,13 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     # ----------------------
     stocked_fish = 7290
     initial_abw_g = 11.9
+    first_inbound_idx = None
     if transfers is not None and not transfers.empty:
         t = _clip(transfers)
         t_in = t[t.get("DESTINATION CAGE", t.get("DEST_CAGE", -1)) == cage_number].sort_values("DATE")
         if not t_in.empty:
             first = t_in.iloc[0]
+            first_inbound_idx = first.name
             if "NUMBER OF FISH" in t_in.columns and pd.notna(first.get("NUMBER OF FISH")):
                 stocked_fish = int(float(first["NUMBER OF FISH"]))
             if "TOTAL WEIGHT [KG]" in t_in.columns and pd.notna(first.get("TOTAL WEIGHT [KG]")):
@@ -169,21 +175,23 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
         h["H_KG"]   = pd.to_numeric(h[h_kg_col], errors="coerce").fillna(0) if h_kg_col else 0
         h["HARV_FISH_CUM"] = h["H_FISH"].cumsum()
         h["HARV_KG_CUM"]   = h["H_KG"].cumsum()
-
-        mh = pd.merge_asof(base[["DATE"]].sort_values("DATE"), h[["DATE","HARV_FISH_CUM","HARV_KG_CUM"]].sort_values("DATE"),
-                           on="DATE", direction="backward")
+        mh = pd.merge_asof(base[["DATE"]], h[["DATE","HARV_FISH_CUM","HARV_KG_CUM"]], on="DATE", direction="backward")
         base["HARV_FISH_CUM"] = mh["HARV_FISH_CUM"].fillna(0)
         base["HARV_KG_CUM"]   = mh["HARV_KG_CUM"].fillna(0)
 
     # ----------------------
-    # Transfers cumulatives (optional)
+    # Transfers cumulatives
     # ----------------------
     if transfers is not None and not transfers.empty:
         t = _clip(transfers)
+        if first_inbound_idx is not None and first_inbound_idx in t.index:
+            t = t.drop(index=first_inbound_idx)  # remove initial stocking transfer
+
         # Convert cage numbers to int
         for col in ["ORIGIN CAGE","DESTINATION CAGE"]:
             if col in t.columns:
                 t[col] = t[col].apply(lambda x: int(str(x).strip()) if pd.notna(x) and str(x).strip().isdigit() else np.nan)
+
         # Outgoing
         tout = t[t.get("ORIGIN CAGE",-1) == cage_number].sort_values("DATE").copy()
         if not tout.empty:
@@ -194,6 +202,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
             mo = pd.merge_asof(base[["DATE"]], tout[["DATE","OUT_FISH_CUM","OUT_KG_CUM"]], on="DATE", direction="backward")
             base["OUT_FISH_CUM"] = mo["OUT_FISH_CUM"].fillna(0)
             base["OUT_KG_CUM"]   = mo["OUT_KG_CUM"].fillna(0)
+
         # Incoming
         tin = t[t.get("DESTINATION CAGE",-1) == cage_number].sort_values("DATE").copy()
         if not tin.empty:
@@ -213,63 +222,102 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
 
     return feeding_c2, harvest_c2, base
 
+
 #Compute summary
 def compute_metrics(stocking_date, end_date, initial_stock, sampling_data, feeding_data, transfer_data, harvest_data):
-    # Prepare date range
+    # ----------------------
+    # Prepare full date range
+    # ----------------------
     dates = pd.date_range(stocking_date, end_date, freq="D")
     df = pd.DataFrame({"Date": dates})
     df["ABW"] = np.nan
-    df["Stock"] = np.nan
+    df["Stock"] = initial_stock
     df["Biomass"] = np.nan
     df["Feed"] = 0.0
     df["Harvest"] = 0.0
-    df["eFCR"] = np.nan
+    df["Transfer_In"] = 0.0
+    df["Transfer_Out"] = 0.0
+    df["GROWTH_KG"] = np.nan
+    df["PERIOD_eFCR"] = np.nan
+    df["AGGREGATED_eFCR"] = np.nan
 
-    # ---- Initial stocking ----
-    df.loc[df["Date"] == stocking_date, "Stock"] = initial_stock
-    df.loc[df["Date"] == stocking_date, "ABW"] = sampling_data.loc[
-        sampling_data["Date"] == stocking_date, "ABW"
-    ].values[0] if stocking_date in sampling_data["Date"].values else 0
+    # ----------------------
+    # Populate feed
+    # ----------------------
+    if feeding_data is not None and not feeding_data.empty:
+        for _, row in feeding_data.iterrows():
+            df.loc[df["Date"] == row["Date"], "Feed"] += row.get("Feed", 0)
 
-    # ---- Feeding ----
-    for _, row in feeding_data.iterrows():
-        df.loc[df["Date"] == row["Date"], "Feed"] += row["Feed"]
+    # ----------------------
+    # Populate transfers
+    # ----------------------
+    if transfer_data is not None and not transfer_data.empty:
+        for _, row in transfer_data.iterrows():
+            d = row["Date"]
+            change = row.get("Change", 0)
+            in_out = row.get("Type", "IN")  # assume "IN" or "OUT"
+            if in_out.upper() == "IN":
+                df.loc[df["Date"] >= d, "Stock"] += change
+                df.loc[df["Date"] == d, "Transfer_In"] += change
+            else:
+                df.loc[df["Date"] >= d, "Stock"] -= change
+                df.loc[df["Date"] == d, "Transfer_Out"] += change
 
-    # ---- Transfers ----
-    for _, row in transfer_data.iterrows():
-        d = row["Date"]
-        df.loc[df["Date"] >= d, "Stock"] += row["Change"]
+    # ----------------------
+    # Populate harvests
+    # ----------------------
+    if harvest_data is not None and not harvest_data.empty:
+        for _, row in harvest_data.iterrows():
+            d = row["Date"]
+            h = row.get("Harvest", 0)
+            df.loc[df["Date"] == d, "Harvest"] += h
+            df.loc[df["Date"] >= d, "Stock"] -= h
 
-    # ---- Harvests ----
-    for _, row in harvest_data.iterrows():
-        d = row["Date"]
-        df.loc[df["Date"] == d, "Harvest"] += row["Harvest"]
-        df.loc[df["Date"] >= d, "Stock"] -= row["Harvest"]
+    # ----------------------
+    # Update ABW from sampling
+    # ----------------------
+    if sampling_data is not None and not sampling_data.empty:
+        for _, row in sampling_data.iterrows():
+            df.loc[df["Date"] == row["Date"], "ABW"] = row.get("ABW", np.nan)
 
-    # ---- Sampling (ABW updates) ----
-    for _, row in sampling_data.iterrows():
-        df.loc[df["Date"] == row["Date"], "ABW"] = row["ABW"]
-
-    # ---- Forward fill ABW & Stock ----
+    # ----------------------
+    # Forward-fill ABW and Stock
+    # ----------------------
     df["ABW"] = df["ABW"].ffill()
     df["Stock"] = df["Stock"].ffill()
 
-    # ---- Biomass ----
+    # ----------------------
+    # Compute Biomass
+    # ----------------------
     df["Biomass"] = df["Stock"] * df["ABW"] / 1000  # kg
 
-    # ---- Period-based eFCR ----
-    for i in range(1, len(sampling_data)):
-        d0 = sampling_data.iloc[i - 1]["Date"]
-        d1 = sampling_data.iloc[i]["Date"]
+    # ----------------------
+    # Compute period growth and eFCR (transfer-aware)
+    # ----------------------
+    if sampling_data is not None and not sampling_data.empty:
+        sampling_dates = sampling_data["Date"].sort_values().tolist()
+        growth_cum = 0.0
+        df["GROWTH_KG"] = np.nan
+        df["PERIOD_eFCR"] = np.nan
+        df["AGGREGATED_eFCR"] = np.nan
 
-        feed_used = df.loc[(df["Date"] > d0) & (df["Date"] <= d1), "Feed"].sum()
-        biomass_gain = df.loc[df["Date"] == d1, "Biomass"].values[0] - df.loc[df["Date"] == d0, "Biomass"].values[0]
+        for i in range(1, len(sampling_dates)):
+            d0, d1 = sampling_dates[i-1], sampling_dates[i]
 
-        if biomass_gain > 0:
-            # Assign eFCR ONLY to the day AFTER the period
-            next_row = df.index[df["Date"] == d1][0]
-            if next_row < len(df):
-                df.loc[next_row, "eFCR"] = feed_used / biomass_gain
+            biomass_gain = df.loc[df["Date"] == d1, "Biomass"].values[0] - df.loc[df["Date"] == d0, "Biomass"].values[0]
+            feed_used = df.loc[(df["Date"] > d0) & (df["Date"] <= d1), "Feed"].sum()
+            transfer_in_kg  = df.loc[(df["Date"] > d0) & (df["Date"] <= d1), "Transfer_In"].sum()
+            transfer_out_kg = df.loc[(df["Date"] > d0) & (df["Date"] <= d1), "Transfer_Out"].sum()
+            harvest_kg      = df.loc[(df["Date"] > d0) & (df["Date"] <= d1), "Harvest"].sum()
+
+            growth = biomass_gain + harvest_kg + transfer_out_kg - transfer_in_kg
+            idx = df.index[df["Date"] == d1][0]
+            df.loc[idx, "GROWTH_KG"] = growth
+
+            if growth > 0:
+                df.loc[idx, "PERIOD_eFCR"] = feed_used / growth
+                growth_cum += growth
+                df.loc[idx, "AGGREGATED_eFCR"] = df.loc[idx, "Feed"].cumsum() / growth_cum
 
     return df
 
