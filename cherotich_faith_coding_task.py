@@ -265,13 +265,11 @@ if feeding_file and harvest_file and sampling_file:
         feeding_data=feeding_c2,
         transfer_data=transfers,
         harvest_data=harvest_c2)
-    
   
     mock_feeding, mock_sampling, mock_harvest, mock_summaries = generate_mock_cages(
-      feeding_c2.copy(), sampling_c2.copy(), harvest_c2.copy()
-    )all_summaries = {2: summary_c2, **mock_summaries}
+        feeding_c2.copy(), sampling_c2.copy(), harvest_c2.copy())all_summaries = {2: summary_c2, **mock_summaries}
 
-
+    
     # Sidebar selection
     selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_summaries.keys()))
     selected_kpi  = st.sidebar.selectbox("Select KPI", ["Biomass", "ABW", "eFCR"])
