@@ -269,8 +269,7 @@ if feeding_file and harvest_file and sampling_file:
   
     mock_feeding, mock_sampling, mock_harvest, mock_summaries = generate_mock_cages(
       feeding_c2.copy(), sampling_c2.copy(), harvest_c2.copy()
-    )
-  all_summaries = {2: summary_c2, **mock_summaries}
+    )all_summaries = {2: summary_c2, **mock_summaries}
 
 
     # Sidebar selection
