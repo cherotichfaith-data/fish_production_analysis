@@ -183,7 +183,9 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5, start_
         f = feeding_c2.copy()
         f["CAGE NUMBER"] = cage
         feed_col = find_col(f, ["FEED_KG", "FEED (KG)", "FEED"], "FEED_KG")
-        if feed_col:
+        if not feed_col:
+            f["FEED_KG"] = 0
+        else:
             f["FEED_KG"] = pd.to_numeric(f[feed_col], errors="coerce").fillna(0)
             f["FEED_KG"] *= np.random.uniform(0.9, 1.1, size=len(f))
         mock_feeding.append(f)
@@ -208,15 +210,19 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5, start_
             h[fish_col] = pd.to_numeric(h[fish_col], errors="coerce").ffill().fillna(0)
         mock_harvest.append(h)
 
+        # Ensure feeding + harvest DataFrames have required columns
+        feeding_safe = f[["DATE", "FEED_KG"]] if "DATE" in f and "FEED_KG" in f else pd.DataFrame(columns=["DATE", "FEED_KG"])
+        harvest_safe = h[["DATE", fish_col, kg_col]] if (fish_col and kg_col) else h[["DATE"]] if "DATE" in h else pd.DataFrame(columns=["DATE"])
+
         # Summary
         summary = compute_metrics(
             stocking_date=s["DATE"].min(),
             end_date=s["DATE"].max(),
             initial_stock=s["FISH_ALIVE"].iloc[0],
             sampling_data=s[["DATE", "ABW_G"]],
-            feeding_data=f[["DATE", "FEED_KG"]],
+            feeding_data=feeding_safe,
             transfer_data=None,
-            harvest_data=h[["DATE", fish_col, kg_col]] if (fish_col and kg_col) else h[["DATE"]]
+            harvest_data=harvest_safe
         )
         mock_summaries[cage] = summary
 
