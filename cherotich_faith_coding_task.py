@@ -175,6 +175,9 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5, start_
         sampling_c2 = sampling_c2.copy()
         sampling_c2["ABW_G"] = np.linspace(50, 800, len(sampling_c2))
 
+    if "FISH_ALIVE" not in sampling_c2.columns:
+        sampling_c2["FISH_ALIVE"] = np.linspace(5000, 1000, len(sampling_c2)).astype(int)
+
     for cage in range(start_id, start_id + num_cages):
         # Feeding
         f = feeding_c2.copy()
@@ -189,8 +192,7 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5, start_
         s = sampling_c2.copy()
         s["CAGE NUMBER"] = cage
         s["ABW_G"] *= np.random.uniform(0.95, 1.05, size=len(s))
-        if "FISH_ALIVE" in s.columns:
-            s["FISH_ALIVE"] = pd.to_numeric(s["FISH_ALIVE"], errors="coerce").ffill().fillna(0)
+        s["FISH_ALIVE"] = pd.to_numeric(s["FISH_ALIVE"], errors="coerce").ffill().fillna(0)
         s["BIOMASS_KG"] = s["FISH_ALIVE"] * s["ABW_G"] / 1000
         mock_sampling.append(s)
 
@@ -210,7 +212,7 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5, start_
         summary = compute_metrics(
             stocking_date=s["DATE"].min(),
             end_date=s["DATE"].max(),
-            initial_stock=s["FISH_ALIVE"].iloc[0] if "FISH_ALIVE" in s.columns else 0,
+            initial_stock=s["FISH_ALIVE"].iloc[0],
             sampling_data=s[["DATE", "ABW_G"]],
             feeding_data=f[["DATE", "FEED_KG"]],
             transfer_data=None,
