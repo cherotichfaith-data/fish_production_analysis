@@ -264,14 +264,12 @@ if feeding_file and harvest_file and sampling_file:
         sampling_data=sampling_c2[["DATE", "ABW_G"]] if "ABW_G" in sampling_c2 else pd.DataFrame(),
         feeding_data=feeding_c2,
         transfer_data=transfers,
-        harvest_data=harvest_c2
-    )
-
-    # Mock cages
-    mock_feeding, mock_sampling, mock_harvest, mock_summaries = generate_mock_cages(
-    feeding_c2.copy(), sampling_c2.copy(), harvest_c2.copy()
-    )
-  all_summaries = {2: summary_c2, **mock_summaries}
+        harvest_data=harvest_c2)
+  
+# Mock cages 
+mock_feeding, mock_sampling, mock_harvest, mock_summaries = generate_mock_cages(feeding_c2.copy(), sampling_c2.copy(), harvest_c2.copy()
+  )
+all_summaries = {2: summary_c2, **mock_summaries}
 
     # Sidebar selection
     selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_summaries.keys()))
