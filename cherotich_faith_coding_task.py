@@ -213,123 +213,92 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
 
     return feeding_c2, harvest_c2, base
 
-#compute summary
-def compute_summary(feeding_c2, sampling_c2):
-    feeding_c2 = feeding_c2.copy()
-    s = sampling_c2.copy().sort_values("DATE")
+#Compute summary
+def compute_metrics(stocking_date, end_date, initial_stock, sampling_data, feeding_data, transfer_data, harvest_data):
+    # Prepare date range
+    dates = pd.date_range(stocking_date, end_date, freq="D")
+    df = pd.DataFrame({"Date": dates})
+    df["ABW"] = np.nan
+    df["Stock"] = np.nan
+    df["Biomass"] = np.nan
+    df["Feed"] = 0.0
+    df["Harvest"] = 0.0
+    df["eFCR"] = np.nan
 
-    # Enhanced column finding for feed and ABW
-    feed_col = find_col(feeding_c2, ["FEED AMOUNT (KG)","FEED AMOUNT (Kg)","FEED AMOUNT [KG]","FEED (KG)","FEED KG","FEED_AMOUNT","FEED"], "FEED")
-    abw_col  = find_col(s, ["AVERAGE BODY WEIGHT(G)","AVERAGE BODY WEIGHT (G)","ABW(G)","ABW [G]","ABW"], "ABW")
-    
-    # Return early if essential columns missing
-    if not feed_col or not abw_col:
-        return s
+    # ---- Initial stocking ----
+    df.loc[df["Date"] == stocking_date, "Stock"] = initial_stock
+    df.loc[df["Date"] == stocking_date, "ABW"] = sampling_data.loc[
+        sampling_data["Date"] == stocking_date, "ABW"
+    ].values[0] if stocking_date in sampling_data["Date"].values else 0
 
-    # Cumulative feed
-    feeding_c2 = feeding_c2.sort_values("DATE")
-    feeding_c2["CUM_FEED"] = pd.to_numeric(feeding_c2[feed_col], errors="coerce").fillna(0).cumsum()
+    # ---- Feeding ----
+    for _, row in feeding_data.iterrows():
+        df.loc[df["Date"] == row["Date"], "Feed"] += row["Feed"]
 
-    # Merge cumulative feed to sampling
-    summary = pd.merge_asof(s, feeding_c2[["DATE", "CUM_FEED"]], on="DATE", direction="backward")
+    # ---- Transfers ----
+    for _, row in transfer_data.iterrows():
+        d = row["Date"]
+        df.loc[df["Date"] >= d, "Stock"] += row["Change"]
 
-    # Enhanced ABW and biomass calculation
-    summary["ABW_G"] = pd.to_numeric(summary[abw_col].map(to_number), errors="coerce")
-    summary["BIOMASS_KG"] = (pd.to_numeric(summary["FISH_ALIVE"], errors="coerce").fillna(0) * summary["ABW_G"].fillna(0) / 1000.0)
+    # ---- Harvests ----
+    for _, row in harvest_data.iterrows():
+        d = row["Date"]
+        df.loc[df["Date"] == d, "Harvest"] += row["Harvest"]
+        df.loc[df["Date"] >= d, "Stock"] -= row["Harvest"]
 
-    # Period deltas
-    summary["FEED_PERIOD_KG"]    = summary["CUM_FEED"].diff()
-    summary["FEED_AGG_KG"]       = summary["CUM_FEED"]
-    summary["ΔBIOMASS_STANDING"] = summary["BIOMASS_KG"].diff()
+    # ---- Sampling (ABW updates) ----
+    for _, row in sampling_data.iterrows():
+        df.loc[df["Date"] == row["Date"], "ABW"] = row["ABW"]
 
-    # Period logistics (kg)
-    for cum_col, per_col in [
-        ("IN_KG_CUM","TRANSFER_IN_KG"),
-        ("OUT_KG_CUM","TRANSFER_OUT_KG"),
-        ("HARV_KG_CUM","HARVEST_KG")
-    ]:
-        summary[per_col] = summary[cum_col].diff() if cum_col in summary.columns else np.nan
+    # ---- Forward fill ABW & Stock ----
+    df["ABW"] = df["ABW"].ffill()
+    df["Stock"] = df["Stock"].ffill()
 
-    # Period logistics (fish)
-    summary["TRANSFER_IN_FISH"]  = summary["IN_FISH_CUM"].diff()   if "IN_FISH_CUM"   in summary.columns else np.nan
-    summary["TRANSFER_OUT_FISH"] = summary["OUT_FISH_CUM"].diff()  if "OUT_FISH_CUM"  in summary.columns else np.nan
-    summary["HARVEST_FISH"]      = summary["HARV_FISH_CUM"].diff() if "HARV_FISH_CUM" in summary.columns else np.nan
+    # ---- Biomass ----
+    df["Biomass"] = df["Stock"] * df["ABW"] / 1000  # kg
 
-    # Enhanced growth calculation
-    summary["GROWTH_KG"] = (
-        summary["ΔBIOMASS_STANDING"]
-        + summary["HARVEST_KG"].fillna(0)
-        + summary["TRANSFER_OUT_KG"].fillna(0)
-        - summary["TRANSFER_IN_KG"].fillna(0)
-    )
+    # ---- Period-based eFCR ----
+    for i in range(1, len(sampling_data)):
+        d0 = sampling_data.iloc[i - 1]["Date"]
+        d1 = sampling_data.iloc[i]["Date"]
 
-    # Fish count discrepancy tracking
-    summary["EXPECTED_FISH_ALIVE"] = (
-        summary.get("STOCKED", 0)
-        - summary.get("HARV_FISH_CUM", 0)
-        + summary.get("IN_FISH_CUM", 0)
-        - summary.get("OUT_FISH_CUM", 0)
-    )
-    actual_fish = pd.to_numeric(summary.get("NUMBER OF FISH"), errors="coerce")
-    summary["FISH_COUNT_DISCREPANCY"] = pd.to_numeric(summary["EXPECTED_FISH_ALIVE"], errors="coerce").fillna(0) - actual_fish.fillna(0)
+        feed_used = df.loc[(df["Date"] > d0) & (df["Date"] <= d1), "Feed"].sum()
+        biomass_gain = df.loc[df["Date"] == d1, "Biomass"].values[0] - df.loc[df["Date"] == d0, "Biomass"].values[0]
 
-    # eFCR calculations
-    growth_cum = summary["GROWTH_KG"].cumsum(skipna=True)
-    summary["PERIOD_eFCR"]     = np.where(summary["GROWTH_KG"] > 0, summary["FEED_PERIOD_KG"] / summary["GROWTH_KG"], np.nan)
-    summary["AGGREGATED_eFCR"] = np.where(growth_cum > 0, summary["FEED_AGG_KG"] / growth_cum, np.nan)
+        if biomass_gain > 0:
+            # Assign eFCR ONLY to the day AFTER the period
+            next_row = df.index[df["Date"] == d1][0]
+            if next_row < len(df):
+                df.loc[next_row, "eFCR"] = feed_used / biomass_gain
 
-    # First row → NA for period metrics
-    if not summary.empty:
-        first_idx = summary.index.min()
-        summary.loc[first_idx, [
-            "FEED_PERIOD_KG","ΔBIOMASS_STANDING",
-            "TRANSFER_IN_KG","TRANSFER_OUT_KG","HARVEST_KG",
-            "TRANSFER_IN_FISH","TRANSFER_OUT_FISH",
-            "GROWTH_KG","PERIOD_eFCR","FISH_COUNT_DISCREPANCY"
-        ]] = np.nan
+    return df
 
-    # Enhanced column selection
-    cols = [
-        "DATE","CAGE NUMBER","NUMBER OF FISH","ABW_G","BIOMASS_KG",
-        "FEED_PERIOD_KG","FEED_AGG_KG","GROWTH_KG",
-        "TRANSFER_IN_KG","TRANSFER_OUT_KG","HARVEST_KG",
-        "TRANSFER_IN_FISH","TRANSFER_OUT_FISH","HARVEST_FISH",
-        "FISH_COUNT_DISCREPANCY",
-        "PERIOD_eFCR","AGGREGATED_eFCR",
-    ]
-    return summary[[c for c in cols if c in summary.columns]]
-
-# Generate mock cages 
-def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
+def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5, start_id=3):
     """
-    Generate mock cages (default 3–7) based on Cage 2 data.
+    Generate mock cages based on Cage 2 data.
     Adds random variations to simulate different cages.
     Returns feeding, sampling, harvest lists and summaries dictionary.
     """
-    mock_feeding = []
-    mock_sampling = []
-    mock_harvest = []
-    mock_summaries = {}
+    mock_feeding, mock_sampling, mock_harvest, mock_summaries = [], [], [], {}
 
-    # Ensure ABW column exists
     if "ABW_G" not in sampling_c2.columns:
         raise KeyError("Sampling data must have 'ABW_G' column from preprocess_cage2!")
 
-    for cage in range(3, 3 + num_cages):  # Cage numbers 3,4,5,...
+    for cage in range(start_id, start_id + num_cages):
         # ----- Feeding -----
         f = feeding_c2.copy()
         f["CAGE NUMBER"] = cage
-        feed_col = find_col(f, ["FEED AMOUNT (KG)","FEED KG","FEED_PERIOD_KG","FEED"], "FEED")
+        feed_col = find_col(f, ["FEED_PERIOD_KG","FEED AMOUNT (KG)","FEED KG","FEED"], "FEED")
         if feed_col:
-            f[feed_col] = f[feed_col] * np.random.uniform(0.9, 1.1, size=len(f))
+            f[feed_col] *= np.random.uniform(0.9, 1.1, size=len(f))
         mock_feeding.append(f)
 
         # ----- Sampling -----
         s = sampling_c2.copy()
         s["CAGE NUMBER"] = cage
-        s["ABW_G"] = s["ABW_G"] * np.random.uniform(0.95, 1.05, size=len(s))
+        s["ABW_G"] *= np.random.uniform(0.95, 1.05, size=len(s))
         if "FISH_ALIVE" in s.columns:
-            s["FISH_ALIVE"] = pd.to_numeric(s["FISH_ALIVE"], errors="coerce").fillna(0)
+            s["FISH_ALIVE"] = pd.to_numeric(s["FISH_ALIVE"], errors="coerce").ffill().fillna(0)
         s["BIOMASS_KG"] = s["FISH_ALIVE"] * s["ABW_G"] / 1000
         mock_sampling.append(s)
 
@@ -339,13 +308,13 @@ def generate_mock_cages(feeding_c2, sampling_c2, harvest_c2, num_cages=5):
         fish_col = find_col(h, ["NUMBER OF FISH","N_FISH"], "FISH")
         kg_col   = find_col(h, ["TOTAL WEIGHT [KG]","TOTAL WEIGHT (KG)","WEIGHT [KG]"], "WEIGHT")
         if kg_col:
-            h[kg_col] = h[kg_col] * np.random.uniform(0.95, 1.05, size=len(h))
+            h[kg_col] *= np.random.uniform(0.95, 1.05, size=len(h))
         if fish_col:
-            h[fish_col] = pd.to_numeric(h[fish_col], errors="coerce").fillna(0)
+            h[fish_col] = pd.to_numeric(h[fish_col], errors="coerce").ffill().fillna(0)
         mock_harvest.append(h)
 
         # ----- Summary -----
-        summary = compute_summary(f, s)
+        summary = compute_summary(f, s)   # or replace with compute_metrics pipeline
         mock_summaries[cage] = summary
 
     return mock_feeding, mock_sampling, mock_harvest, mock_summaries
@@ -357,17 +326,20 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# Page config
+# ===========================
+# Page Config
+# ===========================
 st.set_page_config(
     page_title="Fish Cage Production Dashboard",
     layout="wide",
     page_icon="🐟"
 )
 
-# Custom CSS for styling
+# ===========================
+# Custom CSS Styling
+# ===========================
 st.markdown("""
     <style>
-    /* Main title */
     .main-title {
         font-size: 2.5rem;
         font-weight: bold;
@@ -375,14 +347,6 @@ st.markdown("""
         text-align: center;
         margin-bottom: 20px;
     }
-
-    /* Sidebar headers */
-    .sidebar .stHeader {
-        color: #1E90FF;
-        font-weight: bold;
-    }
-
-    /* KPI summary cards */
     .kpi-card {
         background-color: #f0f8ff;
         padding: 15px;
@@ -391,23 +355,24 @@ st.markdown("""
         box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
         margin-bottom: 10px;
     }
-
-    /* Table styling */
     .dataframe th {
         background-color: #1E90FF;
         color: white;
     }
-
     .dataframe td {
         font-size: 14px;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# Main title
+# ===========================
+# Main Title
+# ===========================
 st.markdown('<div class="main-title">Fish Cage Production Analysis Dashboard</div>', unsafe_allow_html=True)
 
-# Sidebar upload & selections
+# ===========================
+# Sidebar Uploads
+# ===========================
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
 feeding_file  = st.sidebar.file_uploader("Feeding Record", type=["xlsx"])
@@ -415,71 +380,112 @@ harvest_file  = st.sidebar.file_uploader("Fish Harvest", type=["xlsx"])
 sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
 transfer_file = st.sidebar.file_uploader("Fish Transfer (optional)", type=["xlsx"])
 
+# ===========================
+# Main Logic
+# ===========================
 if feeding_file and harvest_file and sampling_file:
     # Load and preprocess Cage 2
-    feeding, harvest, sampling, transfers = load_data(feeding_file, harvest_file, sampling_file, transfer_file)
+    feeding, harvest, sampling, transfers = load_data(
+        feeding_file, harvest_file, sampling_file, transfer_file
+    )
     feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling, transfers)
-    summary_c2 = compute_summary(feeding_c2, sampling_c2)
+    summary_c2 = compute_summary(feeding_c2, sampling_c2)  # uses corrected logic
 
-    # Generate mock cages (Cages 3–7)
-    mock_feeding, mock_sampling, mock_harvest, mock_summaries = generate_mock_cages(feeding_c2, sampling_c2, harvest_c2)
-    
-    # Combine all summaries into a dictionary
+    # Generate mock cages (3–7)
+    mock_feeding, mock_sampling, mock_harvest, mock_summaries = generate_mock_cages(
+        feeding_c2, sampling_c2, harvest_c2
+    )
+
+    # Combine all summaries into dictionary
     all_summaries = {2: summary_c2, **mock_summaries}
 
-    # Sidebar: select cage and KPI
+    # Sidebar: Cage & KPI selection
     selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_summaries.keys()))
-    selected_kpi   = st.sidebar.selectbox("Select KPI", ["Biomass","ABW","eFCR"])
-    
+    selected_kpi  = st.sidebar.selectbox("Select KPI", ["Biomass", "ABW", "eFCR"])
+
     summary_df = all_summaries[selected_cage]
 
-    # KPI cards
+    # ===========================
+    # KPI Summary Cards
+    # ===========================
     st.subheader(f"Cage {selected_cage} – Production Summary")
     col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(f'<div class="kpi-card"><h3>Total Biomass</h3><p>{summary_df["BIOMASS_KG"].sum():,.2f} kg</p></div>', unsafe_allow_html=True)
-    with col2:
-        st.markdown(f'<div class="kpi-card"><h3>Average ABW</h3><p>{summary_df["ABW_G"].mean():,.2f} g</p></div>', unsafe_allow_html=True)
-    with col3:
-        st.markdown(f'<div class="kpi-card"><h3>Average eFCR</h3><p>{summary_df["AGGREGATED_eFCR"].mean():.2f}</p></div>', unsafe_allow_html=True)
 
-    # Display summary table
+    with col1:
+        total_biomass = summary_df["BIOMASS_KG"].sum()
+        st.markdown(
+            f'<div class="kpi-card"><h3>Total Biomass</h3><p>{total_biomass:,.2f} kg</p></div>',
+            unsafe_allow_html=True,
+        )
+    with col2:
+        avg_abw = summary_df["ABW_G"].mean()
+        st.markdown(
+            f'<div class="kpi-card"><h3>Average ABW</h3><p>{avg_abw:,.2f} g</p></div>',
+            unsafe_allow_html=True,
+        )
+    with col3:
+        avg_efcr = summary_df["AGGREGATED_eFCR"].mean()
+        st.markdown(
+            f'<div class="kpi-card"><h3>Average eFCR</h3><p>{avg_efcr:.2f}</p></div>',
+            unsafe_allow_html=True,
+        )
+
+    # ===========================
+    # Data Table
+    # ===========================
     show_cols = [
-        "DATE","NUMBER OF FISH","ABW_G","BIOMASS_KG",
-        "FEED_PERIOD_KG","FEED_AGG_KG","GROWTH_KG",
-        "TRANSFER_IN_KG","TRANSFER_OUT_KG","HARVEST_KG",
-        "TRANSFER_IN_FISH","TRANSFER_OUT_FISH","HARVEST_FISH",
+        "DATE", "NUMBER OF FISH", "ABW_G", "BIOMASS_KG",
+        "FEED_PERIOD_KG", "FEED_AGG_KG", "GROWTH_KG",
+        "TRANSFER_IN_KG", "TRANSFER_OUT_KG", "HARVEST_KG",
+        "TRANSFER_IN_FISH", "TRANSFER_OUT_FISH", "HARVEST_FISH",
         "FISH_COUNT_DISCREPANCY",
-        "PERIOD_eFCR","AGGREGATED_eFCR",
+        "PERIOD_eFCR", "AGGREGATED_eFCR",
     ]
     display_summary = summary_df[[c for c in show_cols if c in summary_df.columns]]
     st.dataframe(display_summary, use_container_width=True)
-    
-    st.write(f"**Analysis Period:** 26 Aug 2024 to 09 Jul 2025")
-    st.write(f"**Data Points:** {len(display_summary)} records from {display_summary['DATE'].min().strftime('%d %b %Y')} to {display_summary['DATE'].max().strftime('%d %b %Y')}")
 
+    # Period info
+    st.write(f"**Records:** {len(display_summary)} rows")
+    st.write(f"**From:** {display_summary['DATE'].min().strftime('%d %b %Y')} "
+             f"**To:** {display_summary['DATE'].max().strftime('%d %b %Y')}")
+
+    # ===========================
     # KPI Plots
+    # ===========================
     if selected_kpi == "Biomass":
-        fig = px.line(summary_df.dropna(subset=["BIOMASS_KG"]), x="DATE", y="BIOMASS_KG", markers=True,
-                      title=f"Cage {selected_cage}: Biomass Over Time", labels={"BIOMASS_KG":"Total Biomass (kg)"})
-        fig.update_xaxes(range=[pd.to_datetime("2024-08-26"), pd.to_datetime("2025-07-09")])
+        fig = px.line(
+            summary_df.dropna(subset=["BIOMASS_KG"]),
+            x="DATE", y="BIOMASS_KG", markers=True,
+            title=f"Cage {selected_cage}: Biomass Over Time",
+            labels={"BIOMASS_KG": "Total Biomass (kg)"}
+        )
         st.plotly_chart(fig, use_container_width=True)
-        
+
     elif selected_kpi == "ABW":
-        fig = px.line(summary_df.dropna(subset=["ABW_G"]), x="DATE", y="ABW_G", markers=True,
-                      title=f"Cage {selected_cage}: Average Body Weight Over Time", labels={"ABW_G":"ABW (g)"})
-        fig.update_xaxes(range=[pd.to_datetime("2024-08-26"), pd.to_datetime("2025-07-09")])
+        fig = px.line(
+            summary_df.dropna(subset=["ABW_G"]),
+            x="DATE", y="ABW_G", markers=True,
+            title=f"Cage {selected_cage}: Average Body Weight (ABW) Over Time",
+            labels={"ABW_G": "ABW (g)"}
+        )
         st.plotly_chart(fig, use_container_width=True)
-        
+
     else:  # eFCR
-        dff = summary_df.dropna(subset=["AGGREGATED_eFCR","PERIOD_eFCR"])
-        fig = px.line(dff, x="DATE", y="AGGREGATED_eFCR", markers=True,
-                      title=f"Cage {selected_cage}: eFCR Over Time", labels={"AGGREGATED_eFCR":"Aggregated eFCR"})
-        fig.update_traces(showlegend=True, name="Aggregated eFCR")
-        fig.add_scatter(x=dff["DATE"], y=dff["PERIOD_eFCR"], mode="lines+markers", name="Period eFCR", showlegend=True, line=dict(dash="dash"))
+        dff = summary_df.dropna(subset=["AGGREGATED_eFCR", "PERIOD_eFCR"])
+        fig = px.line(
+            dff, x="DATE", y="AGGREGATED_eFCR", markers=True,
+            title=f"Cage {selected_cage}: eFCR Over Time",
+            labels={"AGGREGATED_eFCR": "Aggregated eFCR"}
+        )
+        fig.update_traces(name="Aggregated eFCR")
+        fig.add_scatter(
+            x=dff["DATE"], y=dff["PERIOD_eFCR"],
+            mode="lines+markers", name="Period eFCR",
+            line=dict(dash="dash")
+        )
         fig.update_layout(yaxis_title="eFCR", legend_title_text="Legend")
-        fig.update_xaxes(range=[pd.to_datetime("2024-08-26"), pd.to_datetime("2025-07-09")])
         st.plotly_chart(fig, use_container_width=True)
+
 else:
-    st.info("Upload the Excel files to begin.")
+    st.info("⬅️ Upload the Excel files to begin.")
 
