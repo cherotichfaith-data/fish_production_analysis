@@ -4,6 +4,13 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
+# Set page config 
+st.set_page_config( 
+    page_title="Fish Production Analysis", 
+    page_icon="🐟", layout="wide", 
+    initial_sidebar_state="expanded"
+)
+
 #start by defining the utility functions
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Standardize column names: strip, collapse spaces, upper-case"""
