@@ -420,14 +420,8 @@ def create_mock_cage_data(summary_c2, num_cages=5):
     return mock_summaries
     
 # 5. Streamlit Interface
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-
-# Page setup with icon
-st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide", page_icon="🐟")
+# Page setup
+st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
 st.title("Fish Cage Production Analysis Dashboard")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
@@ -464,40 +458,33 @@ if feeding_file and harvest_file and sampling_file:
     df = all_cages[selected_cage].copy()
 
     # Ensure key display columns exist
-    for col in ['BIOMASS_KG', 'AGGREGATED_eFCR', 'PERIOD_eFCR']:
-        if col not in df.columns:
-            df[col] = np.nan
+    if 'BIOMASS_KG' not in df.columns:
+        df['BIOMASS_KG'] = np.nan
+    if 'AGGREGATED_eFCR' not in df.columns:
+        df['AGGREGATED_eFCR'] = np.nan
+    if 'PERIOD_eFCR' not in df.columns:
+        df['PERIOD_eFCR'] = np.nan
 
-    # Forward-fill eFCR to smooth plot
-    df['AGGREGATED_eFCR'] = df['AGGREGATED_eFCR'].ffill()
-    df['PERIOD_eFCR'] = df['PERIOD_eFCR'].ffill()
-
-    # Production summary table (rounded for readability)
+    # Production summary table
     st.subheader(f"Cage {selected_cage} Production Summary")
     display_cols = ['DATE', 'NUMBER OF FISH', 'BIOMASS_KG', 'FEED_AGG_KG', 'AGGREGATED_eFCR', 'PERIOD_eFCR']
-    df_display = df[display_cols].copy()
-    for col in ['BIOMASS_KG', 'FEED_AGG_KG', 'AGGREGATED_eFCR', 'PERIOD_eFCR']:
-        df_display[col] = df_display[col].round(2)
-    st.dataframe(df_display.sort_values("DATE").reset_index(drop=True))
+    st.dataframe(df[display_cols].sort_values("DATE").reset_index(drop=True))
 
     # KPI plots
     if selected_kpi == "Growth":
         fig = px.line(df, x='DATE', y='BIOMASS_KG', markers=True,
                       title=f'Cage {selected_cage}: Growth Over Time',
                       labels={'BIOMASS_KG': 'Biomass (Kg)'})
-        fig.update_traces(hovertemplate='%{y:.2f} Kg on %{x|%d-%b-%Y}')
         st.plotly_chart(fig, use_container_width=True)
     else:  # eFCR
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=df['DATE'], y=df['AGGREGATED_eFCR'],
-            mode='lines+markers', name='Aggregated eFCR',
-            hovertemplate='%{y:.2f} on %{x|%d-%b-%Y}'
+            mode='lines+markers', name='Aggregated eFCR'
         ))
         fig.add_trace(go.Scatter(
             x=df['DATE'], y=df['PERIOD_eFCR'],
-            mode='lines+markers', name='Period eFCR',
-            hovertemplate='%{y:.2f} on %{x|%d-%b-%Y}'
+            mode='lines+markers', name='Period eFCR'
         ))
         fig.update_layout(
             title=f'Cage {selected_cage}: eFCR Over Time',
