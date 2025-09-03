@@ -186,7 +186,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
         feeding_c2 = pd.DataFrame({
             'DATE': date_range,
             'CAGE NUMBER': cage_number,
-            'FEED AMOUNT (Kg)': np.random.uniform(5, 15, size=len(date_range))
+            'FEED AMOUNT (KG)': np.random.uniform(5, 15, size=len(date_range))
         })
 
     # Compute biomass before transfers
@@ -309,7 +309,7 @@ if feeding_file and harvest_file and sampling_file:
         fig = px.line(
             df, x="DATE", y="TOTAL_WEIGHT_KG", markers=True,
             title=f"Cage {selected_cage}: Growth Over Time",
-            labels={"TOTAL_WEIGHT_KG": "Total Weight (Kg)"}
+            labels={"TOTAL_WEIGHT_KG": "Total Weight (KG)"}
         )
         st.plotly_chart(fig)
 
