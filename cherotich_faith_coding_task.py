@@ -4,12 +4,115 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-# 1. Load data
-def load_data(feeding_file, harvest_file, sampling_file):
-    feeding = pd.read_excel(feeding_file)
-    harvest = pd.read_excel(harvest_file)
-    sampling = pd.read_excel(sampling_file)
-    return feeding, harvest, sampling
+#start by defining the utility functions
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Standardize column names: strip, collapse spaces, upper-case"""
+    df = df.copy()
+    df.columns = [re.sub(r"\s+", " ", c.strip()).upper() for c in df.columns]
+    return df
+
+def to_int_cage(series: pd.Series) -> pd.Series:
+    """Extract cage number (int) from mixed labels like 'CAGE 3 A' or 'C3A'"""
+    def _coerce(x):
+        if pd.isna(x): return None
+        if isinstance(x, (int, np.integer)): return int(x)
+        m = re.search(r"(\d+)", str(x))
+        return int(m.group(1)) if m else None
+    return series.apply(_coerce)
+
+def find_col(df: pd.DataFrame, candidates, fuzzy_hint: str | None = None) -> str | None:
+    """Find a column in df matching one of candidates"""
+    lut = {c.upper(): c for c in df.columns}
+    for name in candidates:
+        if name.upper() in lut:
+            return lut[name.upper()]
+    if fuzzy_hint:
+        for U, orig in lut.items():
+            if fuzzy_hint.upper() in U:
+                return orig
+    return None
+
+def to_number(x):
+    """Convert messy numeric strings (with commas, text) into floats"""
+    if pd.isna(x):
+        return np.nan
+    s = str(x).replace(",", "")
+    m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", s)
+    return float(m.group()) if m else np.nan
+
+# Load data
+def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None, verbose=True):
+    """
+    Load + normalize the four input files and coerce key columns.
+    Returns dict: feeding, harvest, sampling, transfers
+    """
+    feeding  = normalize_columns(pd.read_excel(feeding_file))
+    harvest  = normalize_columns(pd.read_excel(harvest_file))
+    sampling = normalize_columns(pd.read_excel(sampling_file))
+    transfers = normalize_columns(pd.read_excel(transfer_file)) if transfer_file else None
+
+    # Feeding
+    c = find_col(feeding, ["CAGE NUMBER", "CAGE"], "CAGE")
+    if c: feeding["CAGE NUMBER"] = to_int_cage(feeding[c])
+    fa = find_col(feeding, ["FEED AMOUNT (KG)", "FEED AMOUNT [KG]", "FEED (KG)", "FEED"], "FEED")
+    if fa: feeding["FEED AMOUNT (KG)"] = feeding[fa].apply(to_number)
+    # parse dates
+    if "DATE" in feeding.columns:
+        feeding["DATE"] = pd.to_datetime(feeding["DATE"], errors="coerce")
+
+    # Harvest
+    c = find_col(harvest, ["CAGE NUMBER", "CAGE"], "CAGE")
+    if c: harvest["CAGE NUMBER"] = to_int_cage(harvest[c])
+    hfish = find_col(harvest, ["NUMBER OF FISH"], "FISH")
+    if hfish: harvest["NUMBER OF FISH"] = pd.to_numeric(harvest[hfish].map(to_number), errors="coerce")
+    hkg = find_col(harvest, ["TOTAL WEIGHT (KG)", "TOTAL WEIGHT [KG]"], "WEIGHT")
+    if hkg: harvest["TOTAL WEIGHT [KG]"] = pd.to_numeric(harvest[hkg].map(to_number), errors="coerce")
+    habw = find_col(harvest, ["ABW (G)", "ABW [G]", "ABW(G)", "ABW"], "ABW")
+    if habw: harvest["ABW (G)"] = pd.to_numeric(harvest[habw].map(to_number), errors="coerce")
+    if "DATE" in harvest.columns:
+        harvest["DATE"] = pd.to_datetime(harvest["DATE"], errors="coerce")
+
+    # Sampling
+    c = find_col(sampling, ["CAGE NUMBER", "CAGE"], "CAGE")
+    if c: sampling["CAGE NUMBER"] = to_int_cage(sampling[c])
+    sfish = find_col(sampling, ["NUMBER OF FISH"], "FISH")
+    if sfish: sampling["NUMBER OF FISH"] = pd.to_numeric(sampling[sfish].map(to_number), errors="coerce")
+    sabw = find_col(sampling, ["AVERAGE BODY WEIGHT (G)", "ABW (G)", "ABW [G]", "ABW(G)", "ABW"], "WEIGHT")
+    if sabw: sampling["AVERAGE BODY WEIGHT (G)"] = pd.to_numeric(sampling[sabw].map(to_number), errors="coerce")
+    if "DATE" in sampling.columns:
+        sampling["DATE"] = pd.to_datetime(sampling["DATE"], errors="coerce")
+
+    # Transfers
+    if transfers is not None:
+        oc = find_col(transfers, ["ORIGIN CAGE", "ORIGIN", "ORIGIN CAGE NUMBER"], "ORIGIN")
+        dc = find_col(transfers, ["DESTINATION CAGE", "DESTINATION", "DESTINATION CAGE NUMBER"], "DEST")
+        if oc: transfers["ORIGIN CAGE"] = to_int_cage(transfers[oc])
+        if dc: transfers["DESTINATION CAGE"] = to_int_cage(transfers[dc])
+        tfish = find_col(transfers, ["NUMBER OF FISH", "N_FISH"], "FISH")
+        if tfish: transfers["NUMBER OF FISH"] = pd.to_numeric(transfers[tfish].map(to_number), errors="coerce")
+        tkg = find_col(transfers, ["TOTAL WEIGHT [KG]", "TOTAL WEIGHT (KG)", "WEIGHT [KG]", "WEIGHT (KG)"], "WEIGHT")
+        if tkg and tkg != "TOTAL WEIGHT [KG]":
+            transfers.rename(columns={tkg: "TOTAL WEIGHT [KG]"}, inplace=True)
+        if "TOTAL WEIGHT [KG]" in transfers.columns:
+            transfers["TOTAL WEIGHT [KG]"] = pd.to_numeric(transfers["TOTAL WEIGHT [KG]"].map(to_number), errors="coerce")
+        tabw = find_col(transfers, ["ABW (G)", "ABW [G]", "ABW(G)"], "ABW")
+        if tabw: transfers["ABW (G)"] = pd.to_numeric(transfers[tabw].map(to_number), errors="coerce")
+        if "DATE" in transfers.columns:
+            transfers["DATE"] = pd.to_datetime(transfers["DATE"], errors="coerce")
+
+    data = {"feeding": feeding, "harvest": harvest, "sampling": sampling, "transfers": transfers}
+
+    if verbose:
+        print("=== Data Summary ===")
+        for k, df in data.items():
+            if df is not None and not df.empty:
+                dmin = df["DATE"].min() if "DATE" in df.columns else None
+                dmax = df["DATE"].max() if "DATE" in df.columns else None
+                print(f"{k:<10} rows={len(df):>5} | {dmin} → {dmax}")
+        print("====================")
+
+    return data
+
 
 
 # 2. Preprocess Cage 2
