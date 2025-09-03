@@ -120,7 +120,37 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None, ver
         print("====================")
 
     return data
+def apply_transfers(sampling_df, transfers, cage_number):
+    """
+    Adjust NUMBER OF FISH and TOTAL_WEIGHT_KG in sampling_df 
+    based on transfers involving this cage.
+    """
+    if transfers is None or transfers.empty:
+        return sampling_df
 
+    sampling_df = sampling_df.copy()
+
+    for _, t in transfers.iterrows():
+        date = pd.to_datetime(t["DATE"], errors="coerce")
+        fish = t.get("NUMBER OF FISH", 0) or 0
+        weight = t.get("TOTAL WEIGHT [KG]", 0) or 0
+
+        if pd.isna(date):
+            continue
+
+        # Origin cage (fish leave)
+        if t.get("ORIGIN CAGE") == cage_number:
+            mask = sampling_df["DATE"] >= date
+            sampling_df.loc[mask, "NUMBER OF FISH"] -= fish
+            sampling_df.loc[mask, "TOTAL_WEIGHT_KG"] -= weight
+
+        # Destination cage (fish arrive)
+        if t.get("DESTINATION CAGE") == cage_number:
+            mask = sampling_df["DATE"] >= date
+            sampling_df.loc[mask, "NUMBER OF FISH"] += fish
+            sampling_df.loc[mask, "TOTAL_WEIGHT_KG"] += weight
+
+    return sampling_df
 
 
 # 2. Preprocess Cage 2
