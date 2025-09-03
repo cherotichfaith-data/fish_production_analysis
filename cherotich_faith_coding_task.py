@@ -7,7 +7,11 @@ import plotly.graph_objects as go
 import re
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
+st.set_page_config(
+    page_title="Fish Cage Production Analysis",
+    page_icon="🐟",
+    layout="wide"
+)
 
 # =====================
 # Utitlity/Helper Functions 
