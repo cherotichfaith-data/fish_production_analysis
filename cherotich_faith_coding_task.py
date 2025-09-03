@@ -323,68 +323,191 @@ def compute_summary(feeding_c2, sampling_c2):
     return summary
 
 # 4. Create mock cages (3-7)
-def create_mock_cage_data(summary_c2):
+def create_mock_cage_data(summary_c2, num_cages=5):
+    """Create realistic mock cage data with sophisticated variations"""
     mock_summaries = {}
-    for cage_id in range(3, 8):
+    
+    for cage_id in range(3, 3 + num_cages):
         mock = summary_c2.copy()
         mock['CAGE NUMBER'] = cage_id
-
-        # Randomize weights ±5%, number of fish ±50, feed ±10%
-        mock['TOTAL_WEIGHT_KG'] *= np.random.normal(1, 0.05, size=len(mock))
-        mock['NUMBER OF FISH'] = mock['NUMBER OF FISH'] + np.random.randint(-50, 50, size=len(mock))
-        mock['CUM_FEED'] *= np.random.normal(1, 0.1, size=len(mock))
-
-        # recompute eFCR
-        mock['AGGREGATED_eFCR'] = mock['CUM_FEED'] / mock['TOTAL_WEIGHT_KG']
-        mock['PERIOD_WEIGHT_GAIN'] = mock['TOTAL_WEIGHT_KG'].diff().fillna(mock['TOTAL_WEIGHT_KG'])
-        mock['PERIOD_FEED'] = mock['CUM_FEED'].diff().fillna(mock['CUM_FEED'])
-        mock['PERIOD_eFCR'] = mock['PERIOD_FEED'] / mock['PERIOD_WEIGHT_GAIN']
-
+        
+        # Create realistic performance variations
+        base_performance = np.random.normal(1.0, 0.12)  # Overall cage performance factor
+        growth_efficiency = np.random.normal(1.0, 0.08)  # Growth rate variation
+        feed_efficiency = np.random.normal(1.0, 0.10)    # Feed conversion variation
+        
+        # Apply correlated variations to key metrics
+        if 'BIOMASS_KG' in mock.columns:
+            biomass_factor = np.random.normal(base_performance * growth_efficiency, 0.05, size=len(mock))
+            mock['BIOMASS_KG'] *= np.maximum(biomass_factor, 0.5)  # Prevent negative biomass
+        
+        if 'ABW_G' in mock.columns:
+            # ABW should correlate with overall performance
+            abw_factor = np.random.normal(base_performance, 0.04, size=len(mock))
+            mock['ABW_G'] *= np.maximum(abw_factor, 0.7)
+        
+        if 'NUMBER OF FISH' in mock.columns:
+            # Vary fish count with realistic mortality patterns
+            mortality_variation = np.random.uniform(0.88, 0.98)  # 2-12% mortality range
+            fish_noise = np.random.randint(-30, 15, size=len(mock))  # Random counting errors
+            mock['NUMBER OF FISH'] = np.maximum(
+                (mock['NUMBER OF FISH'] * mortality_variation).astype(int) + fish_noise,
+                100  # Minimum viable fish count
+            )
+        
+        # Feed consumption variations
+        for feed_col in ['FEED_AGG_KG', 'FEED_PERIOD_KG']:
+            if feed_col in mock.columns:
+                feed_factor = np.random.normal(feed_efficiency, 0.06, size=len(mock))
+                mock[feed_col] *= np.maximum(feed_factor, 0.4)  # Prevent unrealistic feed amounts
+        
+        # Transfer and harvest variations (create different cage strategies)
+        transfer_strategy = np.random.choice(['minimal', 'moderate', 'active'], p=[0.4, 0.4, 0.2])
+        
+        if transfer_strategy == 'minimal':
+            # Low transfer activity
+            for col in ['TRANSFER_OUT_KG', 'TRANSFER_IN_KG']:
+                if col in mock.columns:
+                    mock[col] *= np.random.uniform(0.05, 0.2)
+        elif transfer_strategy == 'moderate':
+            # Moderate transfer activity
+            for col in ['TRANSFER_OUT_KG', 'TRANSFER_IN_KG']:
+                if col in mock.columns:
+                    mock[col] *= np.random.uniform(0.3, 0.8)
+        else:  # active
+            # High transfer activity
+            for col in ['TRANSFER_OUT_KG', 'TRANSFER_IN_KG']:
+                if col in mock.columns:
+                    mock[col] *= np.random.uniform(0.8, 1.3)
+        
+        # Harvest timing variations
+        if 'HARVEST_KG' in mock.columns:
+            harvest_strategy = np.random.choice(['early', 'standard', 'late'], p=[0.2, 0.6, 0.2])
+            if harvest_strategy == 'early':
+                mock['HARVEST_KG'] *= np.random.uniform(1.2, 1.8)
+            elif harvest_strategy == 'late':
+                mock['HARVEST_KG'] *= np.random.uniform(0.3, 0.7)
+        
+        # Recalculate derived metrics with new base values
+        if 'GROWTH_KG' in mock.columns:
+            mock['GROWTH_KG'] = (
+                mock.get('ΔBIOMASS_STANDING', 0)
+                + mock.get('HARVEST_KG', 0).fillna(0)
+                + mock.get('TRANSFER_OUT_KG', 0).fillna(0)
+                - mock.get('TRANSFER_IN_KG', 0).fillna(0)
+            )
+        
+        # Recalculate eFCR with new growth and feed values
+        if 'GROWTH_KG' in mock.columns and 'FEED_PERIOD_KG' in mock.columns:
+            growth_cum = mock['GROWTH_KG'].cumsum(skipna=True)
+            mock['PERIOD_eFCR'] = np.where(
+                mock['GROWTH_KG'] > 0,
+                mock['FEED_PERIOD_KG'] / mock['GROWTH_KG'],
+                np.nan
+            )
+            mock['AGGREGATED_eFCR'] = np.where(
+                growth_cum > 0,
+                mock['FEED_AGG_KG'] / growth_cum,
+                np.nan
+            )
+        
+        # Add realistic fish count discrepancies
+        if 'FISH_COUNT_DISCREPANCY' in mock.columns:
+            # Some cages have better record keeping than others
+            record_quality = np.random.choice(['excellent', 'good', 'fair'], p=[0.3, 0.5, 0.2])
+            if record_quality == 'excellent':
+                discrepancy_std = 5
+            elif record_quality == 'good':
+                discrepancy_std = 15
+            else:  # fair
+                discrepancy_std = 35
+            
+            discrepancy_noise = np.random.normal(0, discrepancy_std, size=len(mock))
+            mock['FISH_COUNT_DISCREPANCY'] = discrepancy_noise
+        
+        # Clean up any infinite or extreme values
+        mock = mock.replace([np.inf, -np.inf], np.nan)
+        
+        # Ensure eFCR values are within reasonable bounds
+        for fcr_col in ['PERIOD_eFCR', 'AGGREGATED_eFCR']:
+            if fcr_col in mock.columns:
+                mock[fcr_col] = np.clip(mock[fcr_col], 0.5, 5.0)  # Reasonable eFCR range
+        
         mock_summaries[cage_id] = mock
+    
     return mock_summaries
-
 # 5. Streamlit Interface
-st.title("Fish Cage Production Analysis")
+# Page setup
+st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
+st.title("🐟 Fish Cage Production Analysis Dashboard")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
+# File upload
 feeding_file = st.sidebar.file_uploader("Feeding Record", type=["xlsx"])
 harvest_file = st.sidebar.file_uploader("Fish Harvest", type=["xlsx"])
 sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
+transfer_file = st.sidebar.file_uploader("Fish Transfers (Optional)", type=["xlsx"])
 
 if feeding_file and harvest_file and sampling_file:
-    feeding, harvest, sampling = load_data(feeding_file, harvest_file, sampling_file)
+    
+    # Load data
+    feeding, harvest, sampling, transfers = load_data(
+        feeding_file, harvest_file, sampling_file, transfer_file
+    )
 
-    feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(feeding, harvest, sampling)
-    summary_c2 = compute_summary(feeding_c2, sampling_c2)
+    # Preprocess cage 2
+    feeding_c2, harvest_c2, summary_c2 = preprocess_cage2(
+        feeding, harvest, sampling, transfers
+    )
 
-    # Generate mock cages
+    # Compute summary
+    summary_c2 = compute_summary(feeding_c2, summary_c2)
+
+    # Generate mock cages 3–7
     mock_cages = create_mock_cage_data(summary_c2)
     all_cages = {2: summary_c2, **mock_cages}
 
-    # Sidebar selectors
-    st.sidebar.header("Select Options")
+    # Sidebar options
+    st.sidebar.header("Visualization Options")
     selected_cage = st.sidebar.selectbox("Select Cage", list(all_cages.keys()))
     selected_kpi = st.sidebar.selectbox("Select KPI", ["Growth", "eFCR"])
 
-    df = all_cages[selected_cage]
+    df = all_cages[selected_cage].copy()
 
-    # Display production summary table
+    # Ensure key display columns exist
+    if 'BIOMASS_KG' not in df.columns:
+        df['BIOMASS_KG'] = np.nan
+    if 'AGGREGATED_eFCR' not in df.columns:
+        df['AGGREGATED_eFCR'] = np.nan
+    if 'PERIOD_eFCR' not in df.columns:
+        df['PERIOD_eFCR'] = np.nan
+
+    # Production summary table
     st.subheader(f"Cage {selected_cage} Production Summary")
-    st.dataframe(df[['DATE','NUMBER OF FISH','TOTAL_WEIGHT_KG','AGGREGATED_eFCR','PERIOD_eFCR']])
+    display_cols = ['DATE', 'NUMBER OF FISH', 'BIOMASS_KG', 'FEED_AGG_KG', 'AGGREGATED_eFCR', 'PERIOD_eFCR']
+    st.dataframe(df[display_cols].sort_values("DATE").reset_index(drop=True))
 
-    # Plot graphs
+    # KPI plots
     if selected_kpi == "Growth":
-        df['TOTAL_WEIGHT_KG'] = pd.to_numeric(df['TOTAL_WEIGHT_KG'], errors='coerce')
-        df = df.dropna(subset=['TOTAL_WEIGHT_KG'])
-        fig = px.line(df, x='DATE', y='TOTAL_WEIGHT_KG', markers=True,
+        fig = px.line(df, x='DATE', y='BIOMASS_KG', markers=True,
                       title=f'Cage {selected_cage}: Growth Over Time',
-                      labels={'TOTAL_WEIGHT_KG': 'Total Weight (Kg)'})
-        st.plotly_chart(fig)
-    else:
-        df['AGGREGATED_eFCR'] = pd.to_numeric(df['AGGREGATED_eFCR'], errors='coerce')
-        df['PERIOD_eFCR'] = pd.to_numeric(df['PERIOD_eFCR'], errors='coerce')
-        df = df.dropna(subset=['AGGREGATED_eFCR','PERIOD_eFCR'])
-        fig = px.line(df, x='DATE', y='AGGREGATED_eFCR', markers=True)
-        fig.add_scatter(x=df['DATE'], y=df['PERIOD_eFCR'], mode='lines+markers', name='Period eFCR')
-        fig.update_layout(title=f'Cage {selected_cage}: eFCR Over Time', yaxis_title='eFCR')
-        st.plotly_chart(fig)
+                      labels={'BIOMASS_KG': 'Biomass (Kg)'})
+        st.plotly_chart(fig, use_container_width=True)
+    else:  # eFCR
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['DATE'], y=df['AGGREGATED_eFCR'],
+            mode='lines+markers', name='Aggregated eFCR'
+        ))
+        fig.add_trace(go.Scatter(
+            x=df['DATE'], y=df['PERIOD_eFCR'],
+            mode='lines+markers', name='Period eFCR'
+        ))
+        fig.update_layout(
+            title=f'Cage {selected_cage}: eFCR Over Time',
+            xaxis_title='Date', yaxis_title='eFCR'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.info("Please upload Excel files for Analysis.")
