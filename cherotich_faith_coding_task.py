@@ -417,7 +417,7 @@ def create_mock_cage_data(summary_c2, num_cages=5):
 # 5. Streamlit Interface
 # Page setup
 st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
-st.title("🐟 Fish Cage Production Analysis Dashboard")
+st.title("Fish Cage Production Analysis Dashboard")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
 # File upload
