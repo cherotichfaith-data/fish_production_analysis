@@ -247,9 +247,9 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
 
     return feeding_c2, harvest_c2, base
 
+
 # =====================
-# =====================
-# Enhanced Summary Computation
+# Summary Computation
 # =====================
 def compute_summary(feeding_c2, sampling_c2):
     """Compute Cage 2 production metrics: biomass, feed, and eFCR (period and aggregated)."""
@@ -419,9 +419,10 @@ def create_mock_cage_data(summary_c2, num_cages=5):
 
     return mock_summaries
 
-# 5. Streamlit Interface
-# Page setup
-st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
+# ==============================
+# Streamlit Interface (Corrected)
+# ==============================
+st.set_page_config(page_title="🐟 Fish Cage Production Analysis", layout="wide")
 st.title("🐟 Fish Cage Production Analysis Dashboard")
 st.sidebar.header("Upload Excel Files (Cage 2 only)")
 
@@ -432,7 +433,7 @@ sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
 transfer_file = st.sidebar.file_uploader("Fish Transfers (Optional)", type=["xlsx"])
 
 if feeding_file and harvest_file and sampling_file:
-    
+
     # Load data
     feeding, harvest, sampling, transfers = load_data(
         feeding_file, harvest_file, sampling_file, transfer_file
@@ -452,18 +453,20 @@ if feeding_file and harvest_file and sampling_file:
 
     # Sidebar options
     st.sidebar.header("Visualization Options")
-    selected_cage = st.sidebar.selectbox("Select Cage", list(all_cages.keys()))
+    selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_cages.keys()))
     selected_kpi = st.sidebar.selectbox("Select KPI", ["Growth", "eFCR"])
 
     df = all_cages[selected_cage].copy()
 
     # Ensure key display columns exist
-    if 'BIOMASS_KG' not in df.columns:
-        df['BIOMASS_KG'] = np.nan
-    if 'AGGREGATED_eFCR' not in df.columns:
-        df['AGGREGATED_eFCR'] = np.nan
-    if 'PERIOD_eFCR' not in df.columns:
-        df['PERIOD_eFCR'] = np.nan
+    for col in ["BIOMASS_KG", "AGGREGATED_eFCR", "PERIOD_eFCR"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    # Fill missing numeric values to prevent broken plots
+    df["BIOMASS_KG"].fillna(method="ffill", inplace=True)
+    df["AGGREGATED_eFCR"].fillna(method="ffill", inplace=True)
+    df["PERIOD_eFCR"].fillna(method="ffill", inplace=True)
 
     # Production summary table
     st.subheader(f"Cage {selected_cage} Production Summary")
@@ -488,9 +491,11 @@ if feeding_file and harvest_file and sampling_file:
         ))
         fig.update_layout(
             title=f'Cage {selected_cage}: eFCR Over Time',
-            xaxis_title='Date', yaxis_title='eFCR'
+            xaxis_title='Date', yaxis_title='eFCR',
+            xaxis=dict(showgrid=True), yaxis=dict(showgrid=True)
         )
         st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Please upload Excel files for Analysis.")
+    st.info("Please upload Excel files for analysis.")
+
