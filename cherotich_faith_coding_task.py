@@ -14,17 +14,15 @@ st.set_page_config(
 )
 
 # =====================
-# Utitlity/Helper Functions 
+# Utility/Helper Functions 
 # =====================
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """standardizes column names for consistent processing"""
     df = df.copy()
     df.columns = [re.sub(r"\s+", " ", c.strip()).upper() for c in df.columns]
     return df
 
 def to_int_cage(series: pd.Series) -> pd.Series:
-    """Extract integer cage numbers from mixed data types(strings)"""
     def _coerce(x):
         if pd.isna(x): return None
         if isinstance(x, (int, np.integer)): return int(x)
@@ -34,7 +32,6 @@ def to_int_cage(series: pd.Series) -> pd.Series:
 
 from typing import Optional
 def find_col(df: pd.DataFrame, candidates, fuzzy_hint: Optional[str] = None) -> Optional[str]:
-    """Find column by exact match or fuzzy matching"""
     lut = {c.upper(): c for c in df.columns}
     for name in candidates:
         if name.upper() in lut:
@@ -46,7 +43,6 @@ def find_col(df: pd.DataFrame, candidates, fuzzy_hint: Optional[str] = None) -> 
     return None
 
 def to_number(x):
-    """Convert string to number, handling commas and extracting numeric values from strings"""
     if pd.isna(x):
         return np.nan
     s = str(x).replace(",", "")
@@ -54,12 +50,10 @@ def to_number(x):
     return float(m.group()) if m else np.nan
 
 
+# =====================
 # Data Loading 
 # =====================
 def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
-    """Load and normalize all Excel data files with robust handling and no warnings"""
-    
-    # Load and normalize column names
     feeding = normalize_columns(pd.read_excel(feeding_file))
     harvest = normalize_columns(pd.read_excel(harvest_file))
     sampling = normalize_columns(pd.read_excel(sampling_file))
@@ -71,13 +65,10 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
     cage_col = find_col(sampling, ["CAGE NUMBER", "CAGE"])
     if cage_col:
         sampling["CAGE NUMBER"] = to_int_cage(sampling[cage_col])
-    
-    # Handle harvest cage column variations
     cage_col = find_col(harvest, ["CAGE NUMBER", "CAGE"])
     if cage_col:
         harvest["CAGE NUMBER"] = to_int_cage(harvest[cage_col])
 
-    # Handle transfer data      
     transfers = None
     if transfer_file:
         try:
@@ -86,7 +77,6 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
             st.error(f"Error loading transfer file: {e}")
             transfers = None
 
-        # Standardize weight column
         if transfers is not None:
             wcol = find_col(
                 transfers,
@@ -96,21 +86,20 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
             if wcol and wcol != "TOTAL WEIGHT [KG]":
                 transfers.rename(columns={wcol: "TOTAL WEIGHT [KG]"}, inplace=True)
 
-    # Parse dates safely     
+    # Parse dates safely
     for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
         if df is not None and "DATE" in df.columns:
             df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce", dayfirst=True)
             if df["DATE"].isna().any():
-                st.warning(f"Some dates could not be parsed in {df.shape[0]} rows of {df.columns.tolist()}")
+                st.warning(f"{df['DATE'].isna().sum()} dates could not be parsed in {df.shape[0]} rows of {df.columns.tolist()}")
 
-    # Replace inf/-inf with NaN and avoid downcasting warnings
+    # Replace inf/-inf with NaN
     for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
         if df is not None:
             df.replace([np.inf, -np.inf], np.nan, inplace=True)
-            df[:] = df.infer_objects()  # prevent future downcasting warnings
+            df[:] = df.infer_objects()
 
     return feeding, harvest, sampling, transfers
-
 
 # ==============================
 # Cage 2 Preprocessing
@@ -254,9 +243,8 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     base = base.infer_objects()
 
     return feeding_c2, harvest_c2, base
-
 # =====================
-# Compute summary (Corrected)
+# Compute summary (Corrected & Accurate)
 # =====================
 def compute_summary(feeding_c2, sampling_c2):
     """Compute Cage 2 production metrics: biomass, feed, and eFCR (period and aggregated),
@@ -304,20 +292,18 @@ def compute_summary(feeding_c2, sampling_c2):
         if cum_col in summary.columns:
             summary[per_col] = summary[cum_col].fillna(0).diff()
         else:
-            summary[per_col] = np.nan
+            summary[per_col] = 0.0
 
-    # Growth per period (exclude transfers)
+    # Growth per period (exclude outgoing transfers from standing biomass)
     summary["GROWTH_KG"] = summary["ΔBIOMASS_STANDING"].fillna(0) + \
-                           summary["HARVEST_KG"].fillna(0) - \
-                           summary["TRANSFER_OUT_KG"].fillna(0) + \
-                           summary["TRANSFER_IN_KG"].fillna(0)
+                           summary["HARVEST_KG"].fillna(0)
 
     # Fish count discrepancy
     summary["EXPECTED_FISH_ALIVE"] = (
         summary.get("STOCKED", 0).fillna(0) + 
-        summary.get("IN_FISH_CUM", 0).fillna(0) - 
-        summary.get("OUT_FISH_CUM", 0).fillna(0) - 
-        summary.get("HARV_FISH_CUM", 0).fillna(0)
+        summary.get("TRANSFER_IN_FISH", 0).fillna(0) - 
+        summary.get("TRANSFER_OUT_FISH", 0).fillna(0) - 
+        summary.get("HARVEST_FISH", 0).fillna(0)
     )
     actual_fish = pd.to_numeric(summary.get("NUMBER OF FISH"), errors="coerce").fillna(0)
     summary["FISH_COUNT_DISCREPANCY"] = summary["EXPECTED_FISH_ALIVE"] - actual_fish
@@ -354,7 +340,7 @@ def create_mock_cage_data(summary_c2, num_cages=5):
         mock['CAGE NUMBER'] = cage_id
         
         # Replace first row with Cage 2's stocking data
-        mock.iloc[0] = first_row.iloc[0]
+        mock.iloc[0] = first_row.iloc[0].copy()
 
         # Performance variation factors
         base_perf = np.random.normal(1.0, 0.12)
@@ -388,7 +374,7 @@ def create_mock_cage_data(summary_c2, num_cages=5):
 
         # Transfer variations
         transfer_strategy = np.random.choice(['minimal', 'moderate', 'active'], p=[0.4, 0.4, 0.2])
-        for col in ['TRANSFER_OUT_KG', 'TRANSFER_IN_KG']:
+        for col in ['TRANSFER_OUT_KG', 'TRANSFER_IN_KG', 'TRANSFER_OUT_FISH', 'TRANSFER_IN_FISH']:
             if col in mock.columns:
                 if transfer_strategy == 'minimal':
                     mock[col] *= np.random.uniform(0.05, 0.2)
@@ -405,13 +391,13 @@ def create_mock_cage_data(summary_c2, num_cages=5):
             elif harvest_strategy == 'late':
                 mock['HARVEST_KG'] *= np.random.uniform(0.3, 0.7)
 
-        # Recompute growth and eFCR
+        # Recompute growth and eFCR correctly
         if 'GROWTH_KG' in mock.columns:
             mock['GROWTH_KG'] = (
-                mock.get('ΔBIOMASS_STANDING', 0)
-                + mock.get('HARVEST_KG', 0).fillna(0)
-                + mock.get('TRANSFER_OUT_KG', 0).fillna(0)
-                - mock.get('TRANSFER_IN_KG', 0).fillna(0)
+                mock.get('ΔBIOMASS_STANDING', 0).fillna(0) +
+                mock.get('HARVEST_KG', 0).fillna(0) -
+                mock.get('TRANSFER_OUT_KG', 0).fillna(0) +
+                mock.get('TRANSFER_IN_KG', 0).fillna(0)
             )
 
         if 'GROWTH_KG' in mock.columns and 'FEED_PERIOD_KG' in mock.columns:
@@ -421,8 +407,7 @@ def create_mock_cage_data(summary_c2, num_cages=5):
 
         # Fish count discrepancy
         if 'FISH_COUNT_DISCREPANCY' in mock.columns:
-            quality = np.random.choice(['excellent', 'good', 'fair'], p=[0.3, 0.5, 0.2])
-            std_dev = {'excellent': 5, 'good': 15, 'fair': 35}[quality]
+            std_dev = np.random.choice([5, 15, 35], p=[0.3, 0.5, 0.2])
             mock['FISH_COUNT_DISCREPANCY'] = np.random.normal(0, std_dev, size=len(mock))
 
         # Clean extreme values and clip eFCR
@@ -485,6 +470,10 @@ if feeding_file and harvest_file and sampling_file:
         if col not in df.columns:
             df[col] = np.nan
 
+    # Fill first-period eFCR with NaN for correctness
+    if not df.empty and 'PERIOD_eFCR' in df.columns:
+        df.loc[df.index.min(), 'PERIOD_eFCR'] = np.nan
+
     # Production summary table
     st.subheader(f"Cage {selected_cage} Production Summary")
     display_cols = ['DATE', 'NUMBER OF FISH', 'BIOMASS_KG', 'FEED_AGG_KG', 'AGGREGATED_eFCR', 'PERIOD_eFCR']
@@ -497,6 +486,7 @@ if feeding_file and harvest_file and sampling_file:
             title=f'Cage {selected_cage}: Growth Over Time',
             labels={'BIOMASS_KG': 'Biomass (Kg)'}
         )
+        fig.update_xaxes(range=[df['DATE'].min(), df['DATE'].max()])
         st.plotly_chart(fig, use_container_width=True)
     else:  # eFCR
         fig = go.Figure()
@@ -512,7 +502,9 @@ if feeding_file and harvest_file and sampling_file:
             ))
         fig.update_layout(
             title=f'Cage {selected_cage}: eFCR Over Time',
-            xaxis_title='Date', yaxis_title='eFCR'
+            xaxis_title='Date',
+            yaxis_title='eFCR',
+            xaxis=dict(range=[df['DATE'].min(), df['DATE'].max()])
         )
         st.plotly_chart(fig, use_container_width=True)
 
