@@ -49,10 +49,11 @@ def to_number(x):
     return float(m.group()) if m else np.nan
 
 # =====================
-# Data Loading 
+# =====================
+# Data Loading (Corrected, suppress warnings)
 # =====================
 def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
-    """Load and normalize all Excel data files with robust handling and no warnings"""
+    """Load and normalize all Excel data files without showing warnings"""
     
     # Load and normalize column names
     feeding = normalize_columns(pd.read_excel(feeding_file))
@@ -67,7 +68,6 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
     if cage_col:
         sampling["CAGE NUMBER"] = to_int_cage(sampling[cage_col])
     
-    # Handle harvest cage column variations
     cage_col = find_col(harvest, ["CAGE NUMBER", "CAGE"])
     if cage_col:
         harvest["CAGE NUMBER"] = to_int_cage(harvest[cage_col])
@@ -77,11 +77,9 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
     if transfer_file:
         try:
             transfers = normalize_columns(pd.read_excel(transfer_file))
-        except Exception as e:
-            st.error(f"Error loading transfer file: {e}")
+        except Exception:
             transfers = None
 
-        # Standardize weight column
         if transfers is not None:
             wcol = find_col(
                 transfers,
@@ -91,18 +89,17 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
             if wcol and wcol != "TOTAL WEIGHT [KG]":
                 transfers.rename(columns={wcol: "TOTAL WEIGHT [KG]"}, inplace=True)
 
-    # Parse dates safely     
+    # Parse dates safely (suppress warnings)
     for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
         if df is not None and "DATE" in df.columns:
             df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce", dayfirst=True)
-            if df["DATE"].isna().any():
-                st.warning(f"Some dates could not be parsed in {df.shape[0]} rows of {df.columns.tolist()}")
+            # silently replace unparseable dates with NaT
 
-    # Replace inf/-inf with NaN and avoid downcasting warnings
+    # Replace inf/-inf with NaN and infer objects quietly
     for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
         if df is not None:
             df.replace([np.inf, -np.inf], np.nan, inplace=True)
-            df[:] = df.infer_objects()  # prevent future downcasting warnings
+            df[:] = df.infer_objects()  # avoids dtype warnings
 
     return feeding, harvest, sampling, transfers
 
