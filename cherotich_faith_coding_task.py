@@ -322,73 +322,74 @@ def compute_summary(feeding_c2, sampling_c2):
     return summary
 
 
+# =====================
 # 4. Create mock cages (3-7)
+# =====================
 def create_mock_cage_data(summary_c2, num_cages=5):
-    """Create realistic mock cage data with sophisticated variations"""
+    """Generate realistic mock production data for cages 3–7 based on Cage 2 trends."""
+    
     mock_summaries = {}
     
+    # Copy first stocking row from Cage 2
+    first_row = summary_c2.iloc[0:1].copy()
+
     for cage_id in range(3, 3 + num_cages):
         mock = summary_c2.copy()
         mock['CAGE NUMBER'] = cage_id
         
-        # Create realistic performance variations
-        base_performance = np.random.normal(1.0, 0.12)  # Overall cage performance factor
-        growth_efficiency = np.random.normal(1.0, 0.08)  # Growth rate variation
-        feed_efficiency = np.random.normal(1.0, 0.10)    # Feed conversion variation
-        
-        # Apply correlated variations to key metrics
-        if 'BIOMASS_KG' in mock.columns:
-            biomass_factor = np.random.normal(base_performance * growth_efficiency, 0.05, size=len(mock))
-            mock['BIOMASS_KG'] *= np.maximum(biomass_factor, 0.5)  # Prevent negative biomass
-        
-        if 'ABW_G' in mock.columns:
-            # ABW should correlate with overall performance
-            abw_factor = np.random.normal(base_performance, 0.04, size=len(mock))
-            mock['ABW_G'] *= np.maximum(abw_factor, 0.7)
-        
-        if 'NUMBER OF FISH' in mock.columns:
-            # Vary fish count with realistic mortality patterns
-            mortality_variation = np.random.uniform(0.88, 0.98)  # 2-12% mortality range
-            fish_noise = np.random.randint(-30, 15, size=len(mock))  # Random counting errors
-            mock['NUMBER OF FISH'] = np.maximum(
-                (mock['NUMBER OF FISH'] * mortality_variation).astype(int) + fish_noise,
-                100  # Minimum viable fish count
-            )
-        
-        # Feed consumption variations
-        for feed_col in ['FEED_AGG_KG', 'FEED_PERIOD_KG']:
-            if feed_col in mock.columns:
-                feed_factor = np.random.normal(feed_efficiency, 0.06, size=len(mock))
-                mock[feed_col] *= np.maximum(feed_factor, 0.4)  # Prevent unrealistic feed amounts
-        
-        # Transfer and harvest variations (create different cage strategies)
+        # Replace first row with Cage 2's stocking data
+        mock.iloc[0] = first_row.iloc[0]
+
+        # Performance variation factors
+        base_perf = np.random.normal(1.0, 0.12)
+        growth_eff = np.random.normal(1.0, 0.08)
+        feed_eff = np.random.normal(1.0, 0.10)
+
+        for idx in range(1, len(mock)):
+            # Biomass variation
+            if 'BIOMASS_KG' in mock.columns:
+                factor = np.random.normal(base_perf * growth_eff, 0.05)
+                mock.at[idx, 'BIOMASS_KG'] *= max(factor, 0.5)
+
+            # ABW variation
+            if 'ABW_G' in mock.columns:
+                factor = np.random.normal(base_perf, 0.04)
+                mock.at[idx, 'ABW_G'] *= max(factor, 0.7)
+
+            # Fish count variation
+            if 'NUMBER OF FISH' in mock.columns:
+                mortality = np.random.uniform(0.88, 0.98)
+                noise = np.random.randint(-30, 15)
+                mock.at[idx, 'NUMBER OF FISH'] = max(
+                    int(mock.at[idx, 'NUMBER OF FISH'] * mortality) + noise, 100
+                )
+
+            # Feed variations
+            for feed_col in ['FEED_AGG_KG', 'FEED_PERIOD_KG']:
+                if feed_col in mock.columns:
+                    factor = np.random.normal(feed_eff, 0.06)
+                    mock.at[idx, feed_col] *= max(factor, 0.4)
+
+        # Transfer variations
         transfer_strategy = np.random.choice(['minimal', 'moderate', 'active'], p=[0.4, 0.4, 0.2])
-        
-        if transfer_strategy == 'minimal':
-            # Low transfer activity
-            for col in ['TRANSFER_OUT_KG', 'TRANSFER_IN_KG']:
-                if col in mock.columns:
+        for col in ['TRANSFER_OUT_KG', 'TRANSFER_IN_KG']:
+            if col in mock.columns:
+                if transfer_strategy == 'minimal':
                     mock[col] *= np.random.uniform(0.05, 0.2)
-        elif transfer_strategy == 'moderate':
-            # Moderate transfer activity
-            for col in ['TRANSFER_OUT_KG', 'TRANSFER_IN_KG']:
-                if col in mock.columns:
+                elif transfer_strategy == 'moderate':
                     mock[col] *= np.random.uniform(0.3, 0.8)
-        else:  # active
-            # High transfer activity
-            for col in ['TRANSFER_OUT_KG', 'TRANSFER_IN_KG']:
-                if col in mock.columns:
+                else:
                     mock[col] *= np.random.uniform(0.8, 1.3)
-        
-        # Harvest timing variations
+
+        # Harvest variations
         if 'HARVEST_KG' in mock.columns:
             harvest_strategy = np.random.choice(['early', 'standard', 'late'], p=[0.2, 0.6, 0.2])
             if harvest_strategy == 'early':
                 mock['HARVEST_KG'] *= np.random.uniform(1.2, 1.8)
             elif harvest_strategy == 'late':
                 mock['HARVEST_KG'] *= np.random.uniform(0.3, 0.7)
-        
-        # Recalculate derived metrics with new base values
+
+        # Recompute growth and eFCR
         if 'GROWTH_KG' in mock.columns:
             mock['GROWTH_KG'] = (
                 mock.get('ΔBIOMASS_STANDING', 0)
@@ -396,46 +397,28 @@ def create_mock_cage_data(summary_c2, num_cages=5):
                 + mock.get('TRANSFER_OUT_KG', 0).fillna(0)
                 - mock.get('TRANSFER_IN_KG', 0).fillna(0)
             )
-        
-        # Recalculate eFCR with new growth and feed values
+
         if 'GROWTH_KG' in mock.columns and 'FEED_PERIOD_KG' in mock.columns:
             growth_cum = mock['GROWTH_KG'].cumsum(skipna=True)
-            mock['PERIOD_eFCR'] = np.where(
-                mock['GROWTH_KG'] > 0,
-                mock['FEED_PERIOD_KG'] / mock['GROWTH_KG'],
-                np.nan
-            )
-            mock['AGGREGATED_eFCR'] = np.where(
-                growth_cum > 0,
-                mock['FEED_AGG_KG'] / growth_cum,
-                np.nan
-            )
-        
-        # Add realistic fish count discrepancies
+            mock['PERIOD_eFCR'] = np.where(mock['GROWTH_KG'] > 0, mock['FEED_PERIOD_KG'] / mock['GROWTH_KG'], np.nan)
+            mock['AGGREGATED_eFCR'] = np.where(growth_cum > 0, mock['FEED_AGG_KG'] / growth_cum, np.nan)
+
+        # Fish count discrepancy
         if 'FISH_COUNT_DISCREPANCY' in mock.columns:
-            # Some cages have better record keeping than others
-            record_quality = np.random.choice(['excellent', 'good', 'fair'], p=[0.3, 0.5, 0.2])
-            if record_quality == 'excellent':
-                discrepancy_std = 5
-            elif record_quality == 'good':
-                discrepancy_std = 15
-            else:  # fair
-                discrepancy_std = 35
-            
-            discrepancy_noise = np.random.normal(0, discrepancy_std, size=len(mock))
-            mock['FISH_COUNT_DISCREPANCY'] = discrepancy_noise
-        
-        # Clean up any infinite or extreme values
+            quality = np.random.choice(['excellent', 'good', 'fair'], p=[0.3, 0.5, 0.2])
+            std_dev = {'excellent': 5, 'good': 15, 'fair': 35}[quality]
+            mock['FISH_COUNT_DISCREPANCY'] = np.random.normal(0, std_dev, size=len(mock))
+
+        # Clean extreme values and clip eFCR
         mock = mock.replace([np.inf, -np.inf], np.nan)
-        
-        # Ensure eFCR values are within reasonable bounds
         for fcr_col in ['PERIOD_eFCR', 'AGGREGATED_eFCR']:
             if fcr_col in mock.columns:
-                mock[fcr_col] = np.clip(mock[fcr_col], 0.5, 5.0)  # Reasonable eFCR range
-        
+                mock[fcr_col] = np.clip(mock[fcr_col], 0.5, 5.0)
+
         mock_summaries[cage_id] = mock
-    
+
     return mock_summaries
+
 # 5. Streamlit Interface
 # Page setup
 st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
