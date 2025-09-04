@@ -12,15 +12,14 @@ st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
 # =====================
 # Utitlity/Helper Functions 
 # =====================
-
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize column names for consistent processing"""
+    """standardizes column names for consistent processing"""
     df = df.copy()
     df.columns = [re.sub(r"\s+", " ", c.strip()).upper() for c in df.columns]
     return df
 
 def to_int_cage(series: pd.Series) -> pd.Series:
-    """Extract cage numbers from mixed data types"""
+    """Extract integer cage numbers from mixed data types(strings)"""
     def _coerce(x):
         if pd.isna(x): return None
         if isinstance(x, (int, np.integer)): return int(x)
@@ -28,7 +27,8 @@ def to_int_cage(series: pd.Series) -> pd.Series:
         return int(m.group(1)) if m else None
     return series.apply(_coerce)
 
-def find_col(df: pd.DataFrame, candidates, fuzzy_hint: str | None = None) -> str | None:
+from typing import Optional
+def find_col(df: pd.DataFrame, candidates, fuzzy_hint: Optional[str] = None) -> Optional[str]:
     """Find column by exact match or fuzzy matching"""
     lut = {c.upper(): c for c in df.columns}
     for name in candidates:
@@ -41,7 +41,7 @@ def find_col(df: pd.DataFrame, candidates, fuzzy_hint: str | None = None) -> str
     return None
 
 def to_number(x):
-    """Convert string to number, handling commas and extracting numeric values"""
+    """Convert string to number, handling commas and extracting numeric values from strings"""
     if pd.isna(x):
         return np.nan
     s = str(x).replace(",", "")
