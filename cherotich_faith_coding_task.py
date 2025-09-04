@@ -256,17 +256,21 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     return feeding_c2, harvest_c2, base
 
 # =====================
-# Compute summary
+# Compute summary (Corrected)
 # =====================
 def compute_summary(feeding_c2, sampling_c2):
-    """Compute Cage 2 production metrics: biomass, feed, and eFCR (period and aggregated)."""
+    """Compute Cage 2 production metrics: biomass, feed, and eFCR (period and aggregated),
+       fully accounting for transfers and harvests.
+    """
     
     feeding_c2 = feeding_c2.copy()
     s = sampling_c2.copy().sort_values("DATE")
 
     # Find relevant columns
-    feed_col = find_col(feeding_c2, ["FEED AMOUNT (KG)", "FEED AMOUNT (Kg)", "FEED AMOUNT [KG]", "FEED (KG)", "FEED KG"], "FEED")
-    abw_col = find_col(s, ["AVERAGE BODY WEIGHT(G)", "AVERAGE BODY WEIGHT (G)", "ABW(G)", "ABW [G]", "ABW"], "ABW")
+    feed_col = find_col(feeding_c2, ["FEED AMOUNT (KG)", "FEED AMOUNT (Kg)", 
+                                     "FEED AMOUNT [KG]", "FEED (KG)", "FEED KG"], "FEED")
+    abw_col = find_col(s, ["AVERAGE BODY WEIGHT(G)", "AVERAGE BODY WEIGHT (G)", 
+                           "ABW(G)", "ABW [G]", "ABW"], "ABW")
     
     if not feed_col or not abw_col:
         return s
@@ -287,30 +291,36 @@ def compute_summary(feeding_c2, sampling_c2):
     summary["FEED_AGG_KG"] = summary["CUM_FEED"]
     summary["ΔBIOMASS_STANDING"] = summary["BIOMASS_KG"].diff()
 
-    # Period logistics
-    for cum_col, per_col in [
-        ("IN_KG_CUM", "TRANSFER_IN_KG"),
-        ("OUT_KG_CUM", "TRANSFER_OUT_KG"),
-        ("HARV_KG_CUM", "HARVEST_KG")
-    ]:
-        summary[per_col] = summary[cum_col].diff() if cum_col in summary.columns else np.nan
-
-    summary["TRANSFER_IN_FISH"] = summary["IN_FISH_CUM"].diff() if "IN_FISH_CUM" in summary.columns else np.nan
-    summary["TRANSFER_OUT_FISH"] = summary["OUT_FISH_CUM"].diff() if "OUT_FISH_CUM" in summary.columns else np.nan
-    summary["HARVEST_FISH"] = summary["HARV_FISH_CUM"].diff() if "HARV_FISH_CUM" in summary.columns else np.nan
+    # Period logistics: transfers & harvests
+    cum_to_period = {
+        "IN_KG_CUM": "TRANSFER_IN_KG",
+        "OUT_KG_CUM": "TRANSFER_OUT_KG",
+        "HARV_KG_CUM": "HARVEST_KG",
+        "IN_FISH_CUM": "TRANSFER_IN_FISH",
+        "OUT_FISH_CUM": "TRANSFER_OUT_FISH",
+        "HARV_FISH_CUM": "HARVEST_FISH"
+    }
+    for cum_col, per_col in cum_to_period.items():
+        if cum_col in summary.columns:
+            summary[per_col] = summary[cum_col].fillna(0).diff()
+        else:
+            summary[per_col] = np.nan
 
     # Growth per period (exclude transfers)
-    summary["GROWTH_KG"] = summary["ΔBIOMASS_STANDING"].fillna(0) + summary["HARVEST_KG"].fillna(0)
+    summary["GROWTH_KG"] = summary["ΔBIOMASS_STANDING"].fillna(0) + \
+                           summary["HARVEST_KG"].fillna(0) - \
+                           summary["TRANSFER_OUT_KG"].fillna(0) + \
+                           summary["TRANSFER_IN_KG"].fillna(0)
 
     # Fish count discrepancy
     summary["EXPECTED_FISH_ALIVE"] = (
-        summary.get("STOCKED", 0)
-        - summary.get("HARV_FISH_CUM", 0)
-        + summary.get("IN_FISH_CUM", 0)
-        - summary.get("OUT_FISH_CUM", 0)
+        summary.get("STOCKED", 0).fillna(0) + 
+        summary.get("IN_FISH_CUM", 0).fillna(0) - 
+        summary.get("OUT_FISH_CUM", 0).fillna(0) - 
+        summary.get("HARV_FISH_CUM", 0).fillna(0)
     )
     actual_fish = pd.to_numeric(summary.get("NUMBER OF FISH"), errors="coerce").fillna(0)
-    summary["FISH_COUNT_DISCREPANCY"] = summary["EXPECTED_FISH_ALIVE"].fillna(0) - actual_fish
+    summary["FISH_COUNT_DISCREPANCY"] = summary["EXPECTED_FISH_ALIVE"] - actual_fish
 
     # eFCR calculations
     growth_cum = summary["GROWTH_KG"].cumsum(skipna=True)
@@ -319,14 +329,14 @@ def compute_summary(feeding_c2, sampling_c2):
 
     # Set first row metrics to NaN
     first_idx = summary.index.min()
-    summary.loc[first_idx, [
-        "FEED_PERIOD_KG", "ΔBIOMASS_STANDING",
-        "TRANSFER_IN_KG", "TRANSFER_OUT_KG", "HARVEST_KG",
-        "TRANSFER_IN_FISH", "TRANSFER_OUT_FISH", "HARVEST_FISH",
-        "GROWTH_KG", "PERIOD_eFCR", "FISH_COUNT_DISCREPANCY"
-    ]] = np.nan
+    na_cols = ["FEED_PERIOD_KG", "ΔBIOMASS_STANDING",
+               "TRANSFER_IN_KG", "TRANSFER_OUT_KG", "HARVEST_KG",
+               "TRANSFER_IN_FISH", "TRANSFER_OUT_FISH", "HARVEST_FISH",
+               "GROWTH_KG", "PERIOD_eFCR", "FISH_COUNT_DISCREPANCY"]
+    summary.loc[first_idx, na_cols] = np.nan
 
     return summary
+
 
 # =====================
 # 4. Create mock cages (3-7)
@@ -426,7 +436,7 @@ def create_mock_cage_data(summary_c2, num_cages=5):
     return mock_summaries
 
 # =====================
-# 5. Streamlit Interface
+# 5. Streamlit Interface (Corrected)
 # =====================
 import streamlit as st
 import plotly.express as px
@@ -465,7 +475,7 @@ if feeding_file and harvest_file and sampling_file:
 
     # Sidebar options
     st.sidebar.header("Visualization Options")
-    selected_cage = st.sidebar.selectbox("Select Cage", list(all_cages.keys()))
+    selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_cages.keys()))
     selected_kpi = st.sidebar.selectbox("Select KPI", ["Growth", "eFCR"])
 
     df = all_cages[selected_cage].copy()
@@ -490,14 +500,16 @@ if feeding_file and harvest_file and sampling_file:
         st.plotly_chart(fig, use_container_width=True)
     else:  # eFCR
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df['DATE'], y=df['AGGREGATED_eFCR'],
-            mode='lines+markers', name='Aggregated eFCR'
-        ))
-        fig.add_trace(go.Scatter(
-            x=df['DATE'], y=df['PERIOD_eFCR'],
-            mode='lines+markers', name='Period eFCR'
-        ))
+        if 'AGGREGATED_eFCR' in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df['DATE'], y=df['AGGREGATED_eFCR'],
+                mode='lines+markers', name='Aggregated eFCR'
+            ))
+        if 'PERIOD_eFCR' in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df['DATE'], y=df['PERIOD_eFCR'],
+                mode='lines+markers', name='Period eFCR'
+            ))
         fig.update_layout(
             title=f'Cage {selected_cage}: eFCR Over Time',
             xaxis_title='Date', yaxis_title='eFCR'
