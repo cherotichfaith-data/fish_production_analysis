@@ -51,12 +51,23 @@ def to_number(x):
 
 
 # =====================
-# Data Loading 
+# Data Loading (Corrected)
 # =====================
+def robust_load_excel(file_path):
+    df = pd.read_excel(file_path)
+    df = normalize_columns(df)
+    if "DATE" in df.columns:
+        df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce", dayfirst=True)
+        if df["DATE"].isna().any():
+            st.warning(f"{df['DATE'].isna().sum()} dates could not be parsed in {df.shape[0]} rows of {df.columns.tolist()}")
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df[:] = df.infer_objects()
+    return df
+
 def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
-    feeding = normalize_columns(pd.read_excel(feeding_file))
-    harvest = normalize_columns(pd.read_excel(harvest_file))
-    sampling = normalize_columns(pd.read_excel(sampling_file))
+    feeding = robust_load_excel(feeding_file)
+    harvest = robust_load_excel(harvest_file)
+    sampling = robust_load_excel(sampling_file)
     
     # Coerce cage columns to integers   
     cage_col = find_col(feeding, ["CAGE NUMBER", "CAGE"])
@@ -72,7 +83,7 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
     transfers = None
     if transfer_file:
         try:
-            transfers = normalize_columns(pd.read_excel(transfer_file))
+            transfers = robust_load_excel(transfer_file)
         except Exception as e:
             st.error(f"Error loading transfer file: {e}")
             transfers = None
@@ -86,20 +97,8 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
             if wcol and wcol != "TOTAL WEIGHT [KG]":
                 transfers.rename(columns={wcol: "TOTAL WEIGHT [KG]"}, inplace=True)
 
-    # Parse dates safely
-    for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
-        if df is not None and "DATE" in df.columns:
-            df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce", dayfirst=True)
-            if df["DATE"].isna().any():
-                st.warning(f"{df['DATE'].isna().sum()} dates could not be parsed in {df.shape[0]} rows of {df.columns.tolist()}")
-
-    # Replace inf/-inf with NaN
-    for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
-        if df is not None:
-            df.replace([np.inf, -np.inf], np.nan, inplace=True)
-            df[:] = df.infer_objects()
-
     return feeding, harvest, sampling, transfers
+
 
 # ==============================
 # Cage 2 Preprocessing
