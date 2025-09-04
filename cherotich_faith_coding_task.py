@@ -49,10 +49,8 @@ def to_number(x):
     return float(m.group()) if m else np.nan
 
 # =====================
+# Data Loading 
 # =====================
-# Data Loading (Improved)
-# =====================
-
 def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
     """Load and normalize all Excel data files with robust handling and no warnings"""
     
@@ -60,49 +58,53 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
     feeding = normalize_columns(pd.read_excel(feeding_file))
     harvest = normalize_columns(pd.read_excel(harvest_file))
     sampling = normalize_columns(pd.read_excel(sampling_file))
-    transfers = normalize_columns(pd.read_excel(transfer_file)) if transfer_file is not None else None
-
-    # Coerce cage columns to integers
-    if "CAGE NUMBER" in feeding.columns:
-        feeding["CAGE NUMBER"] = to_int_cage(feeding["CAGE NUMBER"])
-    if "CAGE NUMBER" in sampling.columns:
-        sampling["CAGE NUMBER"] = to_int_cage(sampling["CAGE NUMBER"])
+    
+    # Coerce cage columns to integers   
+    cage_col = find_col(feeding, ["CAGE NUMBER", "CAGE"])
+    if cage_col:
+        feeding["CAGE NUMBER"] = to_int_cage(feeding[cage_col])
+    cage_col = find_col(sampling, ["CAGE NUMBER", "CAGE"])
+    if cage_col:
+        sampling["CAGE NUMBER"] = to_int_cage(sampling[cage_col])
     
     # Handle harvest cage column variations
-    if "CAGE NUMBER" in harvest.columns:
-        harvest["CAGE NUMBER"] = to_int_cage(harvest["CAGE NUMBER"])
-    elif "CAGE" in harvest.columns:
-        harvest["CAGE NUMBER"] = to_int_cage(harvest["CAGE"])
+    cage_col = find_col(harvest, ["CAGE NUMBER", "CAGE"])
+    if cage_col:
+        harvest["CAGE NUMBER"] = to_int_cage(harvest[cage_col])
 
-    # Handle transfer data
-    if transfers is not None:
-        for col in ["ORIGIN CAGE", "DESTINATION CAGE"]:
-            if col in transfers.columns:
-                transfers[col] = to_int_cage(transfers[col])
-        
+    # Handle transfer data      
+    transfers = None
+    if transfer_file:
+        try:
+            transfers = normalize_columns(pd.read_excel(transfer_file))
+        except Exception as e:
+            st.error(f"Error loading transfer file: {e}")
+            transfers = None
+
         # Standardize weight column
-        wcol = find_col(
-            transfers,
-            ["TOTAL WEIGHT [KG]", "TOTAL WEIGHT (KG)", "WEIGHT [KG]", "WEIGHT (KG)"],
-            fuzzy_hint="WEIGHT",
-        )
-        if wcol and wcol != "TOTAL WEIGHT [KG]":
-            transfers.rename(columns={wcol: "TOTAL WEIGHT [KG]"}, inplace=True)
+        if transfers is not None:
+            wcol = find_col(
+                transfers,
+                ["TOTAL WEIGHT [KG]", "TOTAL WEIGHT (KG)", "WEIGHT [KG]", "WEIGHT (KG)"],
+                fuzzy_hint="WEIGHT",
+            )
+            if wcol and wcol != "TOTAL WEIGHT [KG]":
+                transfers.rename(columns={wcol: "TOTAL WEIGHT [KG]"}, inplace=True)
 
-    # Parse dates safely
+    # Parse dates safely     
     for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
         if df is not None and "DATE" in df.columns:
-            # Use dayfirst=True to match d/m/Y format
             df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce", dayfirst=True)
+            if df["DATE"].isna().any():
+                st.warning(f"Some dates could not be parsed in {df.shape[0]} rows of {df.columns.tolist()}")
 
     # Replace inf/-inf with NaN and avoid downcasting warnings
     for df in [feeding, harvest, sampling] + ([transfers] if transfers is not None else []):
         if df is not None:
             df.replace([np.inf, -np.inf], np.nan, inplace=True)
-            df = df.infer_objects()  # prevent future downcasting warnings
+            df[:] = df.infer_objects()  # prevent future downcasting warnings
 
     return feeding, harvest, sampling, transfers
-
 
 # Enhanced Cage 2 Preprocessing 
 def preprocess_cage2(feeding, harvest, sampling, transfers=None):
