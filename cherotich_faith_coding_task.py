@@ -248,42 +248,43 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     return feeding_c2, harvest_c2, base
 
 # =====================
+# =====================
 # Enhanced Summary Computation
 # =====================
-
 def compute_summary(feeding_c2, sampling_c2):
-    """Compute comprehensive production metrics with period-based calculations"""
+    """Compute Cage 2 production metrics: biomass, feed, and eFCR (period and aggregated)."""
+    
     feeding_c2 = feeding_c2.copy()
     s = sampling_c2.copy().sort_values("DATE")
 
-    # Find relevant columns flexibly
+    # Find relevant columns
     feed_col = find_col(feeding_c2, ["FEED AMOUNT (KG)", "FEED AMOUNT (Kg)", "FEED AMOUNT [KG]", "FEED (KG)", "FEED KG"], "FEED")
     abw_col = find_col(s, ["AVERAGE BODY WEIGHT(G)", "AVERAGE BODY WEIGHT (G)", "ABW(G)", "ABW [G]", "ABW"], "ABW")
     
     if not feed_col or not abw_col:
         return s
 
-    # Calculate cumulative feed
+    # Cumulative feed
     feeding_c2 = feeding_c2.sort_values("DATE")
     feeding_c2["CUM_FEED"] = pd.to_numeric(feeding_c2[feed_col], errors="coerce").fillna(0).cumsum()
 
-    # Merge feed data to sampling timeline
+    # Merge feed with sampling
     summary = pd.merge_asof(s, feeding_c2[["DATE", "CUM_FEED"]], on="DATE", direction="backward")
 
-    # Calculate biomass metrics
-    summary["ABW_G"] = pd.to_numeric(summary[abw_col].map(to_number), errors="coerce")
-    summary["BIOMASS_KG"] = (pd.to_numeric(summary["FISH_ALIVE"], errors="coerce").fillna(0) * summary["ABW_G"].fillna(0) / 1000.0)
+    # Biomass calculation
+    summary["ABW_G"] = pd.to_numeric(summary[abw_col].map(to_number), errors="coerce").fillna(0)
+    summary["BIOMASS_KG"] = summary["FISH_ALIVE"].fillna(0) * summary["ABW_G"] / 1000.0
 
-    # Period-based calculations
+    # Period-based feed and biomass changes
     summary["FEED_PERIOD_KG"] = summary["CUM_FEED"].diff()
     summary["FEED_AGG_KG"] = summary["CUM_FEED"]
     summary["ΔBIOMASS_STANDING"] = summary["BIOMASS_KG"].diff()
 
-    # Logistics per period (kg and fish)
+    # Period logistics
     for cum_col, per_col in [
         ("IN_KG_CUM", "TRANSFER_IN_KG"),
         ("OUT_KG_CUM", "TRANSFER_OUT_KG"),
-        ("HARV_KG_CUM", "HARVEST_KG"),
+        ("HARV_KG_CUM", "HARVEST_KG")
     ]:
         summary[per_col] = summary[cum_col].diff() if cum_col in summary.columns else np.nan
 
@@ -291,30 +292,25 @@ def compute_summary(feeding_c2, sampling_c2):
     summary["TRANSFER_OUT_FISH"] = summary["OUT_FISH_CUM"].diff() if "OUT_FISH_CUM" in summary.columns else np.nan
     summary["HARVEST_FISH"] = summary["HARV_FISH_CUM"].diff() if "HARV_FISH_CUM" in summary.columns else np.nan
 
-    # Growth calculations (including transfers and harvest)
-    summary["GROWTH_KG"] = (
-        summary["ΔBIOMASS_STANDING"]
-        + summary["HARVEST_KG"].fillna(0)
-        + summary["TRANSFER_OUT_KG"].fillna(0)
-        - summary["TRANSFER_IN_KG"].fillna(0)
-    )
+    # Growth per period (exclude transfers)
+    summary["GROWTH_KG"] = summary["ΔBIOMASS_STANDING"].fillna(0) + summary["HARVEST_KG"].fillna(0)
 
-    # Fish count discrepancy tracking for data quality
+    # Fish count discrepancy
     summary["EXPECTED_FISH_ALIVE"] = (
         summary.get("STOCKED", 0)
         - summary.get("HARV_FISH_CUM", 0)
         + summary.get("IN_FISH_CUM", 0)
         - summary.get("OUT_FISH_CUM", 0)
     )
-    actual_fish = pd.to_numeric(summary.get("NUMBER OF FISH"), errors="coerce")
-    summary["FISH_COUNT_DISCREPANCY"] = pd.to_numeric(summary["EXPECTED_FISH_ALIVE"], errors="coerce").fillna(0) - actual_fish.fillna(0)
+    actual_fish = pd.to_numeric(summary.get("NUMBER OF FISH"), errors="coerce").fillna(0)
+    summary["FISH_COUNT_DISCREPANCY"] = summary["EXPECTED_FISH_ALIVE"].fillna(0) - actual_fish
 
     # eFCR calculations
     growth_cum = summary["GROWTH_KG"].cumsum(skipna=True)
     summary["PERIOD_eFCR"] = np.where(summary["GROWTH_KG"] > 0, summary["FEED_PERIOD_KG"] / summary["GROWTH_KG"], np.nan)
     summary["AGGREGATED_eFCR"] = np.where(growth_cum > 0, summary["FEED_AGG_KG"] / growth_cum, np.nan)
 
-    # Set first row (stocking) metrics to NaN for period calculations
+    # Set first row metrics to NaN
     first_idx = summary.index.min()
     summary.loc[first_idx, [
         "FEED_PERIOD_KG", "ΔBIOMASS_STANDING",
@@ -324,6 +320,7 @@ def compute_summary(feeding_c2, sampling_c2):
     ]] = np.nan
 
     return summary
+
 
 # 4. Create mock cages (3-7)
 def create_mock_cage_data(summary_c2, num_cages=5):
