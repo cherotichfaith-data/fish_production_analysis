@@ -104,6 +104,9 @@ def load_data(feeding_file, harvest_file, sampling_file, transfer_file=None):
     return feeding, harvest, sampling, transfers
 
 # Enhanced Cage 2 Preprocessing 
+# ==============================
+# Cage 2 Preprocessing
+# ==============================
 def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     """Preprocess Cage 2 data with robust transfer handling, stocking detection, and safe date/numeric handling"""
     
@@ -243,6 +246,7 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
     base = base.infer_objects()
 
     return feeding_c2, harvest_c2, base
+
 # =====================
 # Enhanced Summary Computation
 # =====================
