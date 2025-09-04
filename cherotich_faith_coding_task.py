@@ -420,7 +420,16 @@ def create_mock_cage_data(summary_c2, num_cages=5):
 
     return mock_summaries
     
-# 5. Streamlit Interface
+# ==============================
+# 5. Streamlit Interface (Corrected)
+# ==============================
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+
 # Page setup
 st.set_page_config(page_title="Fish Cage Production Analysis", layout="wide")
 st.title("Fish Cage Production Analysis Dashboard")
@@ -433,19 +442,19 @@ sampling_file = st.sidebar.file_uploader("Fish Sampling", type=["xlsx"])
 transfer_file = st.sidebar.file_uploader("Fish Transfers (Optional)", type=["xlsx"])
 
 if feeding_file and harvest_file and sampling_file:
-    
+
     # Load data
     feeding, harvest, sampling, transfers = load_data(
         feeding_file, harvest_file, sampling_file, transfer_file
     )
 
     # Preprocess cage 2
-    feeding_c2, harvest_c2, summary_c2 = preprocess_cage2(
+    feeding_c2, harvest_c2, sampling_c2 = preprocess_cage2(
         feeding, harvest, sampling, transfers
     )
 
     # Compute summary
-    summary_c2 = compute_summary(feeding_c2, summary_c2)
+    summary_c2 = compute_summary(feeding_c2, sampling_c2)
 
     # Generate mock cages 3–7
     mock_cages = create_mock_cage_data(summary_c2)
@@ -453,45 +462,50 @@ if feeding_file and harvest_file and sampling_file:
 
     # Sidebar options
     st.sidebar.header("Visualization Options")
-    selected_cage = st.sidebar.selectbox("Select Cage", list(all_cages.keys()))
+    selected_cage = st.sidebar.selectbox("Select Cage", sorted(all_cages.keys()))
     selected_kpi = st.sidebar.selectbox("Select KPI", ["Growth", "eFCR"])
 
     df = all_cages[selected_cage].copy()
+    df = df.sort_values("DATE").reset_index(drop=True)
 
     # Ensure key display columns exist
-    if 'BIOMASS_KG' not in df.columns:
-        df['BIOMASS_KG'] = np.nan
-    if 'AGGREGATED_eFCR' not in df.columns:
-        df['AGGREGATED_eFCR'] = np.nan
-    if 'PERIOD_eFCR' not in df.columns:
-        df['PERIOD_eFCR'] = np.nan
+    for col in ["BIOMASS_KG", "AGGREGATED_eFCR", "PERIOD_eFCR"]:
+        if col not in df.columns:
+            df[col] = np.nan
 
     # Production summary table
     st.subheader(f"Cage {selected_cage} Production Summary")
     display_cols = ['DATE', 'NUMBER OF FISH', 'BIOMASS_KG', 'FEED_AGG_KG', 'AGGREGATED_eFCR', 'PERIOD_eFCR']
-    st.dataframe(df[display_cols].sort_values("DATE").reset_index(drop=True))
+    st.dataframe(df[display_cols])
 
     # KPI plots
     if selected_kpi == "Growth":
-        fig = px.line(df, x='DATE', y='BIOMASS_KG', markers=True,
+        # Smooth growth using rolling average to avoid zigzag
+        df['BIOMASS_SMOOTH'] = df['BIOMASS_KG'].rolling(window=3, min_periods=1).mean()
+        fig = px.line(df, x='DATE', y='BIOMASS_SMOOTH', markers=True,
                       title=f'Cage {selected_cage}: Growth Over Time',
-                      labels={'BIOMASS_KG': 'Biomass (Kg)'})
+                      labels={'BIOMASS_SMOOTH': 'Biomass (Kg)'})
         st.plotly_chart(fig, use_container_width=True)
     else:  # eFCR
+        # Smooth eFCR to avoid spikes from single periods
+        df['PERIOD_eFCR_SMOOTH'] = df['PERIOD_eFCR'].rolling(window=3, min_periods=1).mean()
+        df['AGGREGATED_eFCR_SMOOTH'] = df['AGGREGATED_eFCR'].rolling(window=3, min_periods=1).mean()
+
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=df['DATE'], y=df['AGGREGATED_eFCR'],
+            x=df['DATE'], y=df['AGGREGATED_eFCR_SMOOTH'],
             mode='lines+markers', name='Aggregated eFCR'
         ))
         fig.add_trace(go.Scatter(
-            x=df['DATE'], y=df['PERIOD_eFCR'],
+            x=df['DATE'], y=df['PERIOD_eFCR_SMOOTH'],
             mode='lines+markers', name='Period eFCR'
         ))
         fig.update_layout(
             title=f'Cage {selected_cage}: eFCR Over Time',
-            xaxis_title='Date', yaxis_title='eFCR'
+            xaxis_title='Date', yaxis_title='eFCR',
+            yaxis=dict(range=[0, max(df[['PERIOD_eFCR_SMOOTH', 'AGGREGATED_eFCR_SMOOTH']].max().max(), 1)])
         )
         st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Please upload Excel files for Analysis.")
+    st.info("Please upload Excel files for analysis.")
