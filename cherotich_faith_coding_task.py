@@ -249,10 +249,10 @@ def preprocess_cage2(feeding, harvest, sampling, transfers=None):
 
 
 # ==============================
-# Compute Summary
+# Compute Summary (Corrected)
 # ==============================
 def compute_summary(feeding_c2, sampling_c2):
-    """Compute production metrics including ABW, smooth Growth, PERIOD_eFCR and AGGREGATED_eFCR"""
+    """Compute production metrics including ABW, Biomass, PERIOD_eFCR, and AGGREGATED_eFCR"""
     feeding_c2 = feeding_c2.copy()
     s = sampling_c2.copy().sort_values("DATE")
 
@@ -274,8 +274,8 @@ def compute_summary(feeding_c2, sampling_c2):
     summary["ABW_G"] = pd.to_numeric(summary[abw_col].map(to_number), errors="coerce").ffill().fillna(11.9)
 
     # Biomass
-    summary["BIOMASS_KG"] = (pd.to_numeric(summary["FISH_ALIVE"], errors="coerce").fillna(0) * summary["ABW_G"].fillna(0) / 1000.0)
-    
+    summary["BIOMASS_KG"] = pd.to_numeric(summary.get("FISH_ALIVE", 0), errors="coerce").fillna(0) * summary["ABW_G"] / 1000.0
+
     # Period-based calculations
     summary["FEED_PERIOD_KG"] = summary["CUM_FEED"].diff()
     summary["FEED_AGG_KG"] = summary["CUM_FEED"]
@@ -286,41 +286,42 @@ def compute_summary(feeding_c2, sampling_c2):
         ("IN_KG_CUM", "TRANSFER_IN_KG"),
         ("OUT_KG_CUM", "TRANSFER_OUT_KG"),
         ("HARV_KG_CUM", "HARVEST_KG"),
+        ("IN_FISH_CUM", "TRANSFER_IN_FISH"),
+        ("OUT_FISH_CUM", "TRANSFER_OUT_FISH"),
+        ("HARV_FISH_CUM", "HARVEST_FISH")
     ]:
-        summary[per_col] = summary[cum_col].diff() if cum_col in summary.columns else np.nan
-
-    summary["TRANSFER_IN_FISH"] = summary["IN_FISH_CUM"].diff() if "IN_FISH_CUM" in summary.columns else np.nan
-    summary["TRANSFER_OUT_FISH"] = summary["OUT_FISH_CUM"].diff() if "OUT_FISH_CUM" in summary.columns else np.nan
-    summary["HARVEST_FISH"] = summary["HARV_FISH_CUM"].diff() if "HARV_FISH_CUM" in summary.columns else np.nan
+        summary[per_col] = summary[cum_col].diff() if cum_col in summary.columns else 0.0
 
     # Growth
-    summary["GROWTH_KG"] = (summary["ΔBIOMASS_STANDING"].fillna(0) + summary["HARVEST_KG"].fillna(0))
+    summary["GROWTH_KG"] = summary["ΔBIOMASS_STANDING"].fillna(0) + summary["HARVEST_KG"].fillna(0)
 
     # Fish count discrepancy
     summary["EXPECTED_FISH_ALIVE"] = (
-        summary.get("STOCKED", 0)
-        - summary.get("HARV_FISH_CUM", 0)
-        + summary.get("IN_FISH_CUM", 0)
-        - summary.get("OUT_FISH_CUM", 0)
+        summary.get("STOCKED", 0).fillna(0)
+        + summary.get("IN_FISH_CUM", 0).fillna(0)
+        - summary.get("OUT_FISH_CUM", 0).fillna(0)
+        - summary.get("HARV_FISH_CUM", 0).fillna(0)
     )
-    actual_fish = pd.to_numeric(summary.get("NUMBER OF FISH"), errors="coerce")
-    summary["FISH_COUNT_DISCREPANCY"] = pd.to_numeric(summary["EXPECTED_FISH_ALIVE"], errors="coerce").fillna(0) - actual_fish.fillna(0)
+    actual_fish = pd.to_numeric(summary.get("NUMBER OF FISH", 0), errors="coerce").fillna(0)
+    summary["FISH_COUNT_DISCREPANCY"] = summary["EXPECTED_FISH_ALIVE"] - actual_fish
 
     # eFCR
     growth_cum = summary["GROWTH_KG"].cumsum(skipna=True)
     summary["PERIOD_eFCR"] = np.where(summary["GROWTH_KG"] > 0, summary["FEED_PERIOD_KG"] / summary["GROWTH_KG"], np.nan)
     summary["AGGREGATED_eFCR"] = np.where(growth_cum > 0, summary["FEED_AGG_KG"] / growth_cum, np.nan)
 
-    # First row metrics as NaN
+    # Set first row metrics to NaN
     first_idx = summary.index.min()
-    summary.loc[first_idx, [
+    na_cols = [
         "FEED_PERIOD_KG", "ΔBIOMASS_STANDING",
         "TRANSFER_IN_KG", "TRANSFER_OUT_KG", "HARVEST_KG",
         "TRANSFER_IN_FISH", "TRANSFER_OUT_FISH", "HARVEST_FISH",
         "GROWTH_KG", "PERIOD_eFCR", "FISH_COUNT_DISCREPANCY"
-    ]] = np.nan
+    ]
+    summary.loc[first_idx, na_cols] = np.nan
 
     return summary
+
 
 
 # 4. Create mock cages (3-7)
